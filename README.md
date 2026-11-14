@@ -40,6 +40,15 @@ settings are unchanged, otherwise the slices no longer match.
 Before each call, the script stops if the battery is below 20 % and unplugged.
 It also pauses while the CPU/GPU temperature is at or above `TEMP_MAX`.
 
+## Example
+
+`exemples/debats.md` is a short (French) record of debates. The small `MAX_MOTS`/`MIN_MOTS` values split it into 4 slices:
+
+```bash
+MAX_MOTS=80 MIN_MOTS=20 refine/refine.sh fr exemples/debats.md "Quels sujets sont débattus ? Pour chaque sujet, indique la température du débat entre 0° (calme) et 100° (très houleux)."
+MAX_MOTS=80 MIN_MOTS=20 premier-dernier/premier-dernier.sh fr exemples/debats.md "un mot qui désigne une forme de nourriture ou d'aliment"
+```
+
 ## Output format
 
 The refine and map-reduce agents produce a title followed by a list, one line per item:
@@ -109,4 +118,5 @@ fusion.sh            de-duplicating merge (refine and map-reduce)
 refine/              refine.sh, refine-fr.Modelfile, refine-en.Modelfile
 map-reduce/          map-reduce.sh, map-reduce-fr.Modelfile, map-reduce-en.Modelfile
 premier-dernier/     premier-dernier.sh, premier-dernier-fr.Modelfile, premier-dernier-en.Modelfile
+exemples/            test document
 ```

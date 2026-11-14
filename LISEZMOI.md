@@ -40,6 +40,15 @@ Une reprise suppose que le document et les réglages n'ont pas changé, sinon le
 Avant chaque appel, le script s'arrête si la batterie est sous 20 % et non
 branchée. Il fait aussi une pause tant que la température CPU/GPU atteint `TEMP_MAX`.
 
+## Exemple
+
+`exemples/debats.md` est un court compte rendu de débats. Les petites valeurs de `MAX_MOTS`/`MIN_MOTS` le découpent en 4 tranches :
+
+```bash
+MAX_MOTS=80 MIN_MOTS=20 refine/refine.sh fr exemples/debats.md "Quels sujets sont débattus ? Pour chaque sujet, indique la température du débat entre 0° (calme) et 100° (très houleux)."
+MAX_MOTS=80 MIN_MOTS=20 premier-dernier/premier-dernier.sh fr exemples/debats.md "un mot qui désigne une forme de nourriture ou d'aliment"
+```
+
 ## Format des résultats
 
 Les agents refine et map-reduce produisent un titre suivi d'une liste, une ligne par élément :
@@ -113,4 +122,5 @@ fusion.sh            fusion sans doublons (refine et map-reduce)
 refine/              refine.sh, refine-fr.Modelfile, refine-en.Modelfile
 map-reduce/          map-reduce.sh, map-reduce-fr.Modelfile, map-reduce-en.Modelfile
 premier-dernier/     premier-dernier.sh, premier-dernier-fr.Modelfile, premier-dernier-en.Modelfile
+exemples/            document de test
 ```
