@@ -85,6 +85,7 @@ max_chars = (num_ctx − k × num_predict − system − fixed text − MARGE_TO
 ```
 
 - `num_ctx`, `num_predict` and the system prompt are read from the model (`ollama show`).
+- The fixed text is the prompt built by `prompt_complet` (`lib/commun.sh`) without excerpt or notes, using a 5-digit dummy index: the leading `=== VARIABLE ===` / `index=<n>` section (slice number, 43 for `043.md`), section headers, question and instruction.
 - `k = 1` reserves room for the answer. In refine, `k = 2`: the notes read back are a previous answer, so they are bounded by `num_predict`.
 - `CAR_PAR_TOKEN` defaults to 2.5, a conservative ratio (about 4.3 chars/token measured on French text with gemma4).
 - A slice never exceeds `MAX_MOTS` words or `max_chars` characters. An overlong line (such as a whole paragraph on one line) is split between words.

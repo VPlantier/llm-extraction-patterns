@@ -31,7 +31,12 @@ esac
 [ -r "$src" ] || erreur "Document illisible : $src"
 verifier_modele "$modele" "$ici/$modele.Modelfile"
 
-fixe="=== $t_extrait === === $t_critere === $critere $consigne"
+# Prompt de la tranche : prompt index extrait.
+prompt() {
+  prompt_complet "$1" "$consigne" "$t_extrait" "$2" "$t_critere" <(printf '%s\n' "$critere")
+}
+# Texte fixe (hors extrait), pour le budget.
+fixe=$(prompt "$INDEX_BUDGET" /dev/null)
 max_car=$(budget_tranche "$modele" "$fixe" 1)
 [ "$max_car" -gt 500 ] || erreur "Contexte trop petit pour $modele : augmente num_ctx ou réduis num_predict / le critère."
 echo "Tranches : $MAX_MOTS mots et $max_car caractères au plus." >&2
@@ -50,15 +55,7 @@ elements() {
   if [ ! -s "$res" ]; then
     avant_appel
     echo "Tranche $f -> $res" >&2
-    {
-      echo "=== $t_extrait ==="
-      cat "$f"
-      echo
-      echo "=== $t_critere ==="
-      echo "$critere"
-      echo
-      echo "$consigne"
-    } | appeler_modele "$modele" > "$res.tmp"
+    prompt "$(indice_tranche "$f")" "$f" | appeler_modele "$modele" > "$res.tmp"
     echo >> "$res.tmp"
     mv "$res.tmp" "$res"
     # Réponse proche de la limite : la fin de la liste a pu être coupée.

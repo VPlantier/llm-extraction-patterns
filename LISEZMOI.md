@@ -86,6 +86,7 @@ max_car = (num_ctx − k × num_predict − système − texte fixe − MARGE_TO
 ```
 
 - `num_ctx`, `num_predict` et le prompt système sont lus dans le modèle (`ollama show`).
+- Le texte fixe est le prompt produit par `prompt_complet` (`lib/commun.sh`) sans extrait ni notes, avec un index fictif de 5 chiffres : section `=== VARIABLE ===` / `index=<n>` (numéro de la tranche, 43 pour `043.md`) en tête, titres de sections, question et consigne.
 - `k = 1` (réservation pour la réponse). En refine, `k = 2` : les notes relues sont une réponse précédente, donc bornées par `num_predict`.
 - `CAR_PAR_TOKEN` vaut 2,5 par défaut, un ratio prudent : on mesure environ 4,3 caractères par token sur du français avec gemma4.
 - Une tranche ne dépasse jamais `MAX_MOTS` mots ni `max_car` caractères. Une ligne trop longue (un paragraphe entier sur une ligne, par exemple) est coupée entre deux mots.

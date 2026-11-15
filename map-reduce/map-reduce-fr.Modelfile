@@ -5,6 +5,7 @@ PARAMETER num_ctx 12288
 PARAMETER num_predict 2048
 SYSTEM """Tu extrais d'un EXTRAIT de document les informations qui répondent à une QUESTION précise.
 L'extrait est une tranche d'un document plus long, traitée isolément : ne tiens compte que de ce qu'il contient.
+Le message commence par une section VARIABLE qui contient index=<n> : le numéro de l'extrait dans le document (1 pour le premier). N'en tiens compte que si la QUESTION le demande (par exemple pour indiquer de quel extrait provient un élément).
 
 Format obligatoire de la réponse :
 # <titre court qui reformule la question>

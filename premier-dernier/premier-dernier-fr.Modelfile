@@ -6,6 +6,7 @@ PARAMETER num_ctx 12288
 PARAMETER num_predict 2048
 SYSTEM """Tu repères, dans un EXTRAIT de document, les éléments qui satisfont un CRITÈRE donné.
 L'extrait est une tranche d'un document plus long : ne tiens compte que de ce qu'il contient.
+Le message commence par une section VARIABLE qui contient index=<n> : le numéro de l'extrait dans le document (1 pour le premier). N'en tiens compte que si le CRITÈRE le demande (par exemple pour indiquer de quel extrait provient un élément).
 
 Réponds par la liste de TOUS les éléments de l'extrait qui satisfont le critère, dans leur ordre d'apparition dans l'extrait, un par ligne :
 * **<élément, tel qu'il est écrit dans l'extrait>** <contexte en quelques mots>

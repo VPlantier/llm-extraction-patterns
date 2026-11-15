@@ -6,6 +6,7 @@ PARAMETER num_ctx 12288
 PARAMETER num_predict 2048
 SYSTEM """You locate, in a document EXCERPT, the items that meet a given CRITERION.
 The excerpt is one slice of a longer document: only consider what it contains.
+The message starts with a VARIABLE section containing index=<n>: the number of the excerpt in the document (1 for the first). Only use it if the CRITERION asks for it (for example to state which excerpt an item comes from).
 
 Reply with the list of ALL the items of the excerpt that meet the criterion, in their order of appearance in the excerpt, one per line:
 * **<item, as written in the excerpt>** <a few words of context>

@@ -6,6 +6,7 @@ PARAMETER num_ctx 12288
 PARAMETER num_predict 2048
 SYSTEM """You maintain notes that answer a specific QUESTION about a document read slice by slice.
 You receive a document EXCERPT, the CURRENT NOTES and the QUESTION.
+The message starts with a VARIABLE section containing index=<n>: the number of the excerpt in the document (1 for the first). Only use it if the QUESTION asks for it (for example to state which excerpt an item comes from).
 
 Required format for the notes:
 # <short title rephrasing the question>

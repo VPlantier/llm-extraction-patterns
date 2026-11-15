@@ -31,9 +31,48 @@ parametre_modele() {
   ollama show "$1" --parameters | awk -v n="$2" '$1 == n { print $2; exit }'
 }
 
+# Numéro d'une tranche d'après son nom : dossier/043.md -> 43.
+indice_tranche() {
+  local b
+  b=$(basename "$1" .md)
+  echo $((10#$b))
+}
+
+# Index fictif utilisé pour estimer le texte fixe : au moins aussi long que
+# tout index réel.
+INDEX_BUDGET=99999
+
+# Écrit sur la sortie standard le prompt complet envoyé au modèle. La section
+# VARIABLE, secondaire, vient en tête ; viennent ensuite les sections données
+# puis la consigne :
+#   === VARIABLE ===
+#   index=<index>
+#
+#   === <titre> ===
+#   <contenu du fichier>
+#   (...)
+#   <consigne>
+# Usage : prompt_complet index consigne titre1 fichier1 [titre2 fichier2...]
+# Un texte (la question...) se passe par substitution : <(printf '%s\n' "$texte").
+# Pour le budget, appeler avec INDEX_BUDGET et /dev/null à la place des
+# contenus variables (extrait, notes) : on obtient exactement le texte fixe.
+prompt_complet() {
+  local index="$1" consigne="$2"
+  shift 2
+  printf '=== VARIABLE ===\nindex=%s\n\n' "$index"
+  while [ $# -ge 2 ]; do
+    printf '=== %s ===\n' "$1"
+    cat "$2"
+    echo
+    shift 2
+  done
+  printf '%s\n' "$consigne"
+}
+
 # Nombre maximal de caractères d'une tranche pour que le prompt complet tienne
 # dans le contexte :
 #   num_ctx - k * num_predict - système - texte fixe - marge
+# texte fixe = sortie de prompt_complet sans extrait ni notes (index compris).
 # k = nombre de blocs de taille num_predict à réserver : 1 pour la réponse,
 # 2 en refine (les notes relues sont une réponse précédente, donc bornées par
 # num_predict, plus la nouvelle réponse).
