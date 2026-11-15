@@ -39,27 +39,7 @@ if [ -n "$sortie" ] && [ -e "$sortie" ]; then
   fichiers=("${fichiers[@]}")
 fi
 
-resultat=$(awk -v titre="$titre" '
-  # Normalisation : puce « * », espaces simples, pas d espace en fin de ligne.
-  function norm(s) { gsub(/[ \t]+/, " ", s); sub(/^ /, "", s); sub(/ $/, "", s); return s }
-  /^[ \t]*#+[ \t]/ {
-    t = norm($0); if (!(t in nt)) ordre[++nbt] = t; nt[t]++; next
-  }
-  /^[ \t]*[*-][ \t]+[^ \t]/ {
-    l = norm($0); sub(/^[*-] /, "* ", l)
-    if (!(l in vu)) { vu[l] = 1; elements[++nb] = l }
-  }
-  END {
-    if (titre == "") {
-      for (i = 1; i <= nbt; i++)
-        if (nt[ordre[i]] > meilleur) { meilleur = nt[ordre[i]]; titre = ordre[i] }
-    } else if (titre !~ /^#/) {
-      titre = "# " titre
-    }
-    if (titre != "") print titre "\n"
-    for (i = 1; i <= nb; i++) print elements[i]
-    printf "%d éléments distincts\n", nb > "/dev/stderr"
-  }' "${fichiers[@]}")
+resultat=$(awk -v titre="$titre" -f extraction.awk "${fichiers[@]}")
 
 if [ -n "$sortie" ]; then
   printf '%s\n' "$resultat" > "$sortie"
