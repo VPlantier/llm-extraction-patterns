@@ -15,12 +15,12 @@ function norm(s) {
 	l = norm($0)
 	sub(/^[*-] /, "* ", l)
 	p = ""
-	if (l ~ /\(.*\)$/) {
+	if (l ~ /\([^\(\)]*\)$/) {
 		p = l
-		if (match(p, /\(.*\)/)){
+		if (match(l, /\([^()]*\)$/)) {
 			p = substr(p, RSTART, RLENGTH)
 		}
-		sub(/ *\(.*\)$/, "", l)
+		sub(/ *\([^()]*\)$/, "", l)
 	}
 	if (!(l in vu)) {
 		vu[l] = ++nb;
