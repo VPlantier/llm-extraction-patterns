@@ -56,6 +56,8 @@ for f in "$dossier"/tranches/*.md; do
   avant_appel
   echo "Tranche $f -> $suiv" >&2
 
+  # En cas d'échec de l'appel (réponse coupée, contexte dépassé), le script
+  # s'arrête ici sans rien écrire : une reprise refera cette tranche.
   nouvelle=$(prompt "$(indice_tranche "$f")" "$f" "$prec" | appeler_modele "$modele")
 
   mots_prec=$(wc -w < "$prec")
@@ -64,7 +66,9 @@ for f in "$dossier"/tranches/*.md; do
     echo "  Attention : $suiv fait $mots_new mots contre $mots_prec avant, perte d'informations possible" >&2
   fi
 
-  echo "$nouvelle" > "$suiv"
+  # Écriture puis renommage : un fichier présent est toujours complet.
+  echo "$nouvelle" > "$suiv.tmp"
+  mv "$suiv.tmp" "$suiv"
 done
 echo "Dernière version : $suiv" >&2
 

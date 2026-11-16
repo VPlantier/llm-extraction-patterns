@@ -7,16 +7,24 @@
 #                  ~4,3 mesuré sur du français avec gemma4)
 #   MARGE_TOKENS   réserve pour le gabarit de conversation et les en-têtes (défaut 256)
 #   TEMP_MAX       température (°C) au-delà de laquelle on fait une pause (défaut 90)
+#   OLLAMA_URL     adresse du serveur ollama          (défaut http://127.0.0.1:11434)
 
 MAX_MOTS="${MAX_MOTS:-2000}"
 MIN_MOTS="${MIN_MOTS:-$((MAX_MOTS / 4))}"
 CAR_PAR_TOKEN="${CAR_PAR_TOKEN:-2.5}"
 MARGE_TOKENS="${MARGE_TOKENS:-256}"
 TEMP_MAX="${TEMP_MAX:-90}"
+OLLAMA_URL="${OLLAMA_URL:-http://127.0.0.1:11434}"
+OLLAMA_URL="${OLLAMA_URL%/}"
 
 RACINE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 erreur() { echo "$*" >&2; exit 1; }
+
+for _commande in ollama curl jq; do
+  command -v "$_commande" > /dev/null || erreur "Commande introuvable : $_commande (nécessaire aux scripts d'extraction)."
+done
+unset _commande
 
 # Vérifie que le modèle existe, sinon indique comment le créer.
 verifier_modele() {
@@ -168,7 +176,41 @@ avant_appel() {
 }
 
 # Envoie l'entrée standard au modèle et écrit la réponse sur la sortie standard.
-# --nowordwrap : une ligne de liste ne doit jamais être coupée en deux.
+# Passe par l'API /api/chat plutôt que par « ollama run », qui ne dit pas
+# pourquoi la génération s'est arrêtée. Le SYSTEM et les PARAMETER du Modelfile
+# s'appliquent comme avec « ollama run ».
+#
+# Échoue (code 1, rien sur la sortie standard) si :
+#   - le serveur ne répond pas ou renvoie une erreur ;
+#   - la réponse a été coupée par num_predict (done_reason = length) ;
+#   - prompt + num_predict dépasse num_ctx : le budget estimé était faux et
+#     ollama a pu tronquer le prompt ou décaler le contexte.
+# L'appelant ne doit donc enregistrer la réponse que si l'appel réussit.
+#
+# Limite connue : si ollama réutilise un début de prompt déjà en cache,
+# prompt_eval_count peut ne compter que la partie nouvelle, et le second
+# contrôle peut alors manquer un dépassement (à vérifier, voir TESTS-A-FAIRE.md).
 appeler_modele() {
-  ollama run "$1" --think=false --nowordwrap
+  local modele="$1" requete reponse champs raison n_prompt n_reponse num_ctx num_predict
+  requete=$(jq -Rs --arg m "$modele" \
+    '{model: $m, messages: [{role: "user", content: .}], stream: false, think: false}') ||
+    erreur "Impossible de construire la requête JSON."
+  reponse=$(curl -sS --fail-with-body -X POST "$OLLAMA_URL/api/chat" \
+    -H 'Content-Type: application/json' --data-binary @- <<< "$requete") ||
+    erreur "Échec de l'appel à ollama ($OLLAMA_URL) : ${reponse:-pas de réponse}"
+
+  champs=$(jq -r '[.done_reason // "", .prompt_eval_count // 0, .eval_count // 0] | @tsv' <<< "$reponse") ||
+    erreur "Réponse d'ollama illisible : $reponse"
+  IFS=$'\t' read -r raison n_prompt n_reponse <<< "$champs"
+  num_ctx=$(parametre_modele "$modele" num_ctx)
+  num_predict=$(parametre_modele "$modele" num_predict)
+  echo "  prompt : $n_prompt tokens, réponse : $n_reponse tokens (num_ctx $num_ctx, num_predict $num_predict)" >&2
+
+  if [ "$raison" = "length" ]; then
+    erreur "Réponse coupée par num_predict ($n_reponse tokens) : réduis MAX_MOTS ou augmente num_predict. Rien n'est enregistré pour cette tranche."
+  fi
+  if [ $((n_prompt + num_predict)) -gt "$num_ctx" ]; then
+    erreur "Prompt de $n_prompt tokens + num_predict $num_predict > num_ctx $num_ctx : le prompt a pu être tronqué. Réduis CAR_PAR_TOKEN ou MAX_MOTS. Rien n'est enregistré pour cette tranche."
+  fi
+  jq -r '.message.content // ""' <<< "$reponse"
 }

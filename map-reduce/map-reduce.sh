@@ -48,8 +48,12 @@ for f in "$dossier"/tranches/*.md; do
   fi
   avant_appel
   echo "Tranche $f -> $res" >&2
+  # En cas d'échec de l'appel (réponse coupée, contexte dépassé), le script
+  # s'arrête ici sans rien écrire : une reprise refera cette tranche.
   reponse=$(prompt "$(indice_tranche "$f")" "$f" | appeler_modele "$modele")
-  echo "$reponse" > "$res"
+  # Écriture puis renommage : un fichier présent est toujours complet.
+  echo "$reponse" > "$res.tmp"
+  mv "$res.tmp" "$res"
 done
 
 "$RACINE/fusion.sh" -o "$dossier/final.md" "$dossier/map"

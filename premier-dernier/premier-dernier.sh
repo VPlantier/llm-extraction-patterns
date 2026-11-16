@@ -40,7 +40,6 @@ fixe=$(prompt "$INDEX_BUDGET" /dev/null)
 max_car=$(budget_tranche "$modele" "$fixe" 1)
 [ "$max_car" -gt 500 ] || erreur "Contexte trop petit pour $modele : augmente num_ctx ou réduis num_predict / le critère."
 echo "Tranches : $MAX_MOTS mots et $max_car caractères au plus." >&2
-num_predict=$(parametre_modele "$modele" num_predict)
 
 mkdir -p "$dossier/reponses"
 decouper "$src" "$dossier/tranches" "$MAX_MOTS" "$max_car"
@@ -49,26 +48,31 @@ nb=${#tranches[@]}
 
 # Fait analyser une tranche (une seule fois, réponse mise en cache) et
 # affiche ses éléments, un par ligne, puce normalisée en « * ».
+# Échoue sans rien enregistrer si l'appel au modèle échoue (réponse coupée,
+# contexte dépassé) : une reprise refera cette tranche.
+# À appeler dans une affectation (liste=$(elements f)) et non dans un tube :
+# l'échec arrête alors le script (set -e).
 elements() {
   local f="$1" res
   res="$dossier/reponses/$(basename "$f")"
   if [ ! -s "$res" ]; then
     avant_appel
     echo "Tranche $f -> $res" >&2
-    prompt "$(indice_tranche "$f")" "$f" | appeler_modele "$modele" > "$res.tmp"
+    # set -e ne s'applique pas dans $(...) : l'échec doit être traité ici.
+    if ! prompt "$(indice_tranche "$f")" "$f" | appeler_modele "$modele" > "$res.tmp"; then
+      rm -f "$res.tmp"
+      return 1
+    fi
     echo >> "$res.tmp"
     mv "$res.tmp" "$res"
-    # Réponse proche de la limite : la fin de la liste a pu être coupée.
-    if [ "$(wc -m < "$res")" -gt $((num_predict * 3)) ]; then
-      echo "  Attention : réponse très longue pour $f, la liste a pu être tronquée (réduis MAX_MOTS)." >&2
-    fi
   fi
   sed -nE 's/^[[:space:]]*[*-][[:space:]]+([^[:space:]].*)$/* \1/p' "$res" | sed -E 's/[[:space:]]+$//'
 }
 
 premier=""; idx=-1
 for ((k = 0; k < nb; k++)); do
-  premier=$(elements "${tranches[k]}" | head -n 1)
+  liste=$(elements "${tranches[k]}")
+  premier=$(head -n 1 <<< "$liste")
   if [ -n "$premier" ]; then idx=$k; break; fi
 done
 if [ "$idx" -lt 0 ]; then
@@ -79,7 +83,8 @@ fi
 
 dernier=""
 for ((k = nb - 1; k >= idx; k--)); do
-  dernier=$(elements "${tranches[k]}" | tail -n 1)
+  liste=$(elements "${tranches[k]}")
+  dernier=$(tail -n 1 <<< "$liste")
   [ -n "$dernier" ] && break
 done
 

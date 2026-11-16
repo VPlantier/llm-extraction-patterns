@@ -22,7 +22,8 @@ done
 ```
 
 Il faut recréer le modèle après chaque modification d'un Modelfile.
-Seuls bash, awk (gawk) et ollama sont nécessaires.
+Il faut bash, awk (gawk), ollama, curl (7.76 ou plus récent) et jq. Les scripts
+appellent l'API d'ollama à l'adresse `OLLAMA_URL` (par défaut `http://127.0.0.1:11434`).
 
 ## Utilisation
 
@@ -93,6 +94,17 @@ max_car = (num_ctx − k × num_predict − système − texte fixe − MARGE_TO
 
 C'est pourquoi chaque Modelfile doit définir `num_predict`.
 
+Ce calcul repose sur une estimation. Après chaque appel, le script lit donc la
+réponse de l'API d'ollama et **s'arrête sans rien enregistrer** pour la tranche si :
+
+- la réponse a été coupée par `num_predict` (`done_reason` = `length`) ;
+- le prompt réel (`prompt_eval_count`) + `num_predict` dépasse `num_ctx` : l'estimation
+  était fausse et ollama a pu tronquer le prompt.
+
+Le message indique quel réglage modifier. Comme rien n'a été enregistré, une
+reprise refait cette tranche. Les nombres de tokens du prompt et de la réponse
+sont affichés à chaque appel.
+
 ## Réglages (variables d'environnement)
 
 | Variable | Défaut | Rôle |
@@ -102,6 +114,7 @@ C'est pourquoi chaque Modelfile doit définir `num_predict`.
 | `CAR_PAR_TOKEN` | 2.5 | ratio prudent caractères/token |
 | `MARGE_TOKENS` | 256 | réserve pour le gabarit de conversation |
 | `TEMP_MAX` | 90 | température (°C) déclenchant une pause |
+| `OLLAMA_URL` | `http://127.0.0.1:11434` | adresse du serveur ollama |
 
 Exemple : `MAX_MOTS=1000 refine/refine.sh fr doc.md "..."`.
 
@@ -113,7 +126,7 @@ Pour le premier, on parcourt les tranches depuis le début jusqu'à trouver un �
 Pour le dernier, on part de la fin, sans remonter avant la tranche du premier.
 Les réponses sont mises en cache dans `reponses/`. Une tranche très dense
 (un dictionnaire, par exemple) peut atteindre la limite `num_predict` : le script
-le signale, il faut alors réduire `MAX_MOTS`.
+s'arrête alors, et il faut réduire `MAX_MOTS`.
 
 ## Organisation
 

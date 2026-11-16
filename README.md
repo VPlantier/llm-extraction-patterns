@@ -22,7 +22,8 @@ for d in refine map-reduce premier-dernier; do
 done
 ```
 
-Recreate a model after editing its Modelfile. Only bash, awk (gawk) and ollama are needed.
+Recreate a model after editing its Modelfile. You need bash, awk (gawk), ollama, curl (7.76 or later) and jq.
+The scripts call the ollama API at `OLLAMA_URL` (default `http://127.0.0.1:11434`).
 
 ## Usage
 
@@ -92,6 +93,16 @@ max_chars = (num_ctx − k × num_predict − system − fixed text − MARGE_TO
 
 This is why every Modelfile must set `num_predict`.
 
+This calculation is an estimate. After each call, the script therefore reads the
+ollama API response and **stops without saving anything** for the slice if:
+
+- the answer was cut off by `num_predict` (`done_reason` = `length`);
+- the actual prompt (`prompt_eval_count`) + `num_predict` exceeds `num_ctx`: the estimate
+  was wrong and ollama may have truncated the prompt.
+
+The message says which setting to change. Since nothing was saved, resuming
+redoes that slice. Prompt and answer token counts are printed for every call.
+
 ## Settings (environment variables)
 
 | Variable | Default | Purpose |
@@ -101,6 +112,7 @@ This is why every Modelfile must set `num_predict`.
 | `CAR_PAR_TOKEN` | 2.5 | conservative chars/token ratio |
 | `MARGE_TOKENS` | 256 | room for the chat template |
 | `TEMP_MAX` | 90 | temperature (°C) that triggers a pause |
+| `OLLAMA_URL` | `http://127.0.0.1:11434` | ollama server address |
 
 ## First-last: how it works
 
@@ -109,7 +121,7 @@ the script keeps the first (or last) one of that list.
 For the first item, slices are scanned from the start until one contains an item.
 For the last item, the scan starts from the end and never goes before the first item's slice.
 Answers are cached in `reponses/`. A very dense slice (a dictionary, for example)
-may hit the `num_predict` limit: the script warns about it, and you should then lower `MAX_MOTS`.
+may hit the `num_predict` limit: the script then stops, and you should lower `MAX_MOTS`.
 
 ## Layout
 
