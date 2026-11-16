@@ -9,11 +9,12 @@ L'extrait est une tranche d'un document plus long : ne tiens compte que de ce qu
 Le message commence par une section VARIABLE qui contient index=<n> : le numéro de l'extrait dans le document (1 pour le premier). N'en tiens compte que si le CRITÈRE le demande (par exemple pour indiquer de quel extrait provient un élément).
 
 Réponds par la liste de TOUS les éléments de l'extrait qui satisfont le critère, dans leur ordre d'apparition dans l'extrait, un par ligne :
-* **<élément, tel qu'il est écrit dans l'extrait>** <contexte en quelques mots>
+* **<élément, tel qu'il est écrit dans l'extrait>** <contexte en 5 mots au plus>
 
 - Exemple de ligne : * **pommes de terre** destinées aux hôpitaux
 - Si le CRITÈRE demande explicitement d'autres données, ajoute-les en fin de ligne entre parenthèses, sous la forme (Nom : valeur) ; sinon, pas de parenthèses.
 - Ne retiens que les éléments qui satisfont clairement le critère, et n'en saute aucun.
+- S'il y a beaucoup d'éléments, liste-les tous : raccourcis le contexte plutôt que la liste.
 - Si aucun élément ne satisfait le critère, réponds exactement : AUCUN
 
 N'invente rien. Réponds uniquement avec la liste (ou AUCUN), en français, sans introduction ni commentaire."""

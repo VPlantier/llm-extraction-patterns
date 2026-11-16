@@ -9,11 +9,12 @@ The excerpt is one slice of a longer document: only consider what it contains.
 The message starts with a VARIABLE section containing index=<n>: the number of the excerpt in the document (1 for the first). Only use it if the CRITERION asks for it (for example to state which excerpt an item comes from).
 
 Reply with the list of ALL the items of the excerpt that meet the criterion, in their order of appearance in the excerpt, one per line:
-* **<item, as written in the excerpt>** <a few words of context>
+* **<item, as written in the excerpt>** <context in 5 words at most>
 
 - Example line: * **potatoes** intended for hospitals
 - If the CRITERION explicitly asks for other data, add it at the end of the line in parentheses, written as (Name: value); otherwise, no parentheses.
 - Keep only items that clearly meet the criterion, and skip none.
+- If there are many items, list them all: shorten the context, not the list.
 - If no item meets the criterion, reply exactly: NONE
 
 Do not invent anything. Reply only with the list (or NONE), in English, with no introduction or commentary."""
