@@ -6,6 +6,8 @@
 #   CAR_PAR_TOKEN  ratio prudent caractères/token pour les estimations (défaut 2.5 ;
 #                  ~4,3 mesuré sur du français avec gemma4)
 #   MARGE_TOKENS   réserve pour le gabarit de conversation et les en-têtes (défaut 256)
+#   CIBLE_CTX      part maximale de num_ctx occupée par l'extrait, pour la
+#                  qualité de l'extraction (défaut 0.35)
 #   TEMP_MAX       température (°C) au-delà de laquelle on fait une pause (défaut 90)
 #   OLLAMA_URL     adresse du serveur ollama          (défaut http://127.0.0.1:11434)
 
@@ -13,6 +15,7 @@ MAX_MOTS="${MAX_MOTS:-2000}"
 MIN_MOTS="${MIN_MOTS:-$((MAX_MOTS / 4))}"
 CAR_PAR_TOKEN="${CAR_PAR_TOKEN:-2.5}"
 MARGE_TOKENS="${MARGE_TOKENS:-256}"
+CIBLE_CTX="${CIBLE_CTX:-0.35}"
 TEMP_MAX="${TEMP_MAX:-90}"
 OLLAMA_URL="${OLLAMA_URL:-http://127.0.0.1:11434}"
 OLLAMA_URL="${OLLAMA_URL%/}"
@@ -77,13 +80,18 @@ prompt_complet() {
   printf '%s\n' "$consigne"
 }
 
-# Nombre maximal de caractères d'une tranche pour que le prompt complet tienne
-# dans le contexte :
-#   num_ctx - k * num_predict - système - texte fixe - marge
-# texte fixe = sortie de prompt_complet sans extrait ni notes (index compris).
-# k = nombre de blocs de taille num_predict à réserver : 1 pour la réponse,
-# 2 en refine (les notes relues sont une réponse précédente, donc bornées par
-# num_predict, plus la nouvelle réponse).
+# Nombre maximal de caractères d'une tranche : le plus petit de deux plafonds,
+# convertis en caractères avec CAR_PAR_TOKEN.
+# 1. Limite dure, pour que le prompt complet tienne dans le contexte :
+#      num_ctx - k * num_predict - système - texte fixe - marge
+#    texte fixe = sortie de prompt_complet sans extrait ni notes (index compris).
+#    k = nombre de blocs de taille num_predict à réserver : 1 pour la réponse,
+#    2 en refine (les notes relues sont une réponse précédente, donc bornées par
+#    num_predict, plus la nouvelle réponse).
+# 2. Plafond de qualité : CIBLE_CTX * num_ctx. Un petit modèle oublie des
+#    éléments et invente bien avant de remplir sa fenêtre ; ce plafond ne porte
+#    que sur l'extrait, la partie que le modèle doit parcourir en entier.
+# Les deux valeurs sont affichées sur la sortie d'erreur.
 budget_tranche() {
   local modele="$1" fixe="$2" k="$3" num_ctx num_predict sys_car fixe_car
   num_ctx=$(parametre_modele "$modele" num_ctx)
@@ -94,9 +102,17 @@ budget_tranche() {
   sys_car=$(ollama show "$modele" --system | wc -m)
   fixe_car=$(printf '%s' "$fixe" | wc -m)
   awk -v ctx="$num_ctx" -v np="$num_predict" -v k="$k" -v s="$sys_car" \
-      -v f="$fixe_car" -v r="$CAR_PAR_TOKEN" -v m="$MARGE_TOKENS" 'BEGIN {
+      -v f="$fixe_car" -v r="$CAR_PAR_TOKEN" -v m="$MARGE_TOKENS" \
+      -v c="$CIBLE_CTX" 'BEGIN {
+    if (!(c + 0 > 0 && c + 0 <= 1)) {
+      print "CIBLE_CTX doit être un nombre compris entre 0 (exclu) et 1 : " c > "/dev/stderr"
+      exit 1
+    }
     t = ctx - k * np - int((s + f) / r + 1) - m
-    print (t > 0 ? int(t * r) : 0)
+    dure = (t > 0 ? int(t * r) : 0)
+    cible = int(c * ctx * r)
+    printf "Limites d'\''une tranche : %d caractères (contexte), %d caractères (CIBLE_CTX %s).\n", dure, cible, c > "/dev/stderr"
+    print (dure < cible ? dure : cible)
   }'
 }
 

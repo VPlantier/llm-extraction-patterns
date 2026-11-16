@@ -94,6 +94,18 @@ max_car = (num_ctx − k × num_predict − système − texte fixe − MARGE_TO
 
 C'est pourquoi chaque Modelfile doit définir `num_predict`.
 
+Cette limite dure évite la troncature, mais pas la baisse de qualité : un petit
+modèle oublie des éléments et invente bien avant de remplir sa fenêtre. Un second
+plafond limite donc l'extrait à une part du contexte :
+
+```
+max_car_cible = CIBLE_CTX × num_ctx × CAR_PAR_TOKEN
+```
+
+La tranche prend la plus petite des deux valeurs (et ne dépasse jamais `MAX_MOTS`
+mots). Les deux limites sont affichées au lancement. Avec les réglages par défaut,
+c'est `CIBLE_CTX` qui l'emporte (environ 10 700 caractères).
+
 Ce calcul repose sur une estimation. Après chaque appel, le script lit donc la
 réponse de l'API d'ollama et **s'arrête sans rien enregistrer** pour la tranche si :
 
@@ -116,6 +128,7 @@ tableaux, URL, code...).
 | `MIN_MOTS` | `MAX_MOTS/4` | on ne coupe sur un titre `#`/`##` qu'au-delà de cette taille, pour éviter les tranches minuscules |
 | `CAR_PAR_TOKEN` | 2.5 | ratio prudent caractères/token |
 | `MARGE_TOKENS` | 256 | réserve pour le gabarit de conversation |
+| `CIBLE_CTX` | 0.35 | part maximale de `num_ctx` occupée par l'extrait (entre 0 et 1) |
 | `TEMP_MAX` | 90 | température (°C) déclenchant une pause |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | adresse du serveur ollama |
 

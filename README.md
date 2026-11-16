@@ -93,6 +93,18 @@ max_chars = (num_ctx − k × num_predict − system − fixed text − MARGE_TO
 
 This is why every Modelfile must set `num_predict`.
 
+This hard limit prevents truncation, but not quality loss: a small model starts
+missing items and making things up well before its window is full. A second cap
+therefore limits the excerpt to a share of the context:
+
+```
+max_chars_target = CIBLE_CTX × num_ctx × CAR_PAR_TOKEN
+```
+
+The slice uses the smaller of the two values (and never exceeds `MAX_MOTS` words).
+Both limits are printed at startup. With the default settings, `CIBLE_CTX` is the
+binding one (about 10,700 characters).
+
 This calculation is an estimate. After each call, the script therefore reads the
 ollama API response and **stops without saving anything** for the slice if:
 
@@ -114,6 +126,7 @@ conservative for this document (numbers, tables, URLs, code...).
 | `MIN_MOTS` | `MAX_MOTS/4` | only split on a `#`/`##` heading beyond this size, to avoid tiny slices |
 | `CAR_PAR_TOKEN` | 2.5 | conservative chars/token ratio |
 | `MARGE_TOKENS` | 256 | room for the chat template |
+| `CIBLE_CTX` | 0.35 | max share of `num_ctx` taken by the excerpt (between 0 and 1) |
 | `TEMP_MAX` | 90 | temperature (°C) that triggers a pause |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | ollama server address |
 

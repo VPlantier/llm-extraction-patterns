@@ -34,7 +34,7 @@ prompt() {
 # Texte fixe (hors extrait), pour le budget.
 fixe=$(prompt "$INDEX_BUDGET" /dev/null)
 max_car=$(budget_tranche "$modele" "$fixe" 1)
-[ "$max_car" -gt 500 ] || erreur "Contexte trop petit pour $modele : augmente num_ctx ou réduis num_predict / la question."
+[ "$max_car" -gt 500 ] || erreur "Contexte trop petit pour $modele : augmente num_ctx ou CIBLE_CTX, ou réduis num_predict / la question."
 echo "Tranches : $MAX_MOTS mots et $max_car caractères au plus." >&2
 
 mkdir -p "$dossier/map"
