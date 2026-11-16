@@ -121,6 +121,20 @@ Les commandes se lancent depuis la racine du dépôt, sous Linux.
   ```bash
   for i in $(seq 120); do cat exemples/debats.md; echo; done > exemples-long.md
   ```
+- Documents réels, dans `documents/` (non versionné ; il faut `pandoc`) :
+  ```bash
+  mkdir -p documents
+  # Tests 6.5, 7.4, 8.x : long débat (référence de température : les « (Exclamations...) »,
+  # « (Protestations...) » notées dans le texte). Couper à la main le menu et le pied de page.
+  curl -sL "https://www.assemblee-nationale.fr/dyn/17/comptes-rendus/seance/session-ordinaire-de-2025-2026/premiere-seance-du-vendredi-24-octobre-2025" \
+    | pandoc -f html -t gfm -o documents/seance.md
+  # Test 7.2 : liste dense, avec un critère étroit (« un poisson »), pas « nourriture ».
+  for l in B G J; do
+    curl -sL "https://fr.wikisource.org/wiki/Dumas.-_Grand_dictionnaire_de_cuisine,_1873/Index_alphab%C3%A9tique_-_$l?action=render" | pandoc -f html -t gfm
+  done > documents/dumas.md
+  ```
+  Test 5.5 : prendre un document chiffré proche des documents réellement traités (ou un
+  article Wikipédia en tableaux, converti de la même façon avec `?action=render`).
 - **Modèle modifié pour un test.** Les scripts appellent des modèles au nom fixe
   (`map-reduce-fr`...). Pour tester avec d'autres paramètres, on remplace
   temporairement le modèle, puis on le recrée à l'identique :
