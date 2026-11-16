@@ -103,7 +103,10 @@ réponse de l'API d'ollama et **s'arrête sans rien enregistrer** pour la tranch
 
 Le message indique quel réglage modifier. Comme rien n'a été enregistré, une
 reprise refait cette tranche. Les nombres de tokens du prompt et de la réponse
-sont affichés à chaque appel.
+sont affichés à chaque appel, avec le ratio réel caractères/token du prompt. Si
+ce ratio est inférieur à `CAR_PAR_TOKEN`, un avertissement conseille de réduire
+`CAR_PAR_TOKEN` : l'estimation n'est pas prudente pour ce document (chiffres,
+tableaux, URL, code...).
 
 ## Réglages (variables d'environnement)
 

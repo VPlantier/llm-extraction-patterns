@@ -175,6 +175,27 @@ avant_appel() {
   done
 }
 
+# Affiche le ratio réel caractères/token du prompt qui vient d'être envoyé, et
+# prévient s'il est inférieur à CAR_PAR_TOKEN : l'estimation du budget n'est
+# alors pas prudente pour ce document.
+# Caractères = prompt système + message, comme dans budget_tranche.
+# Le ratio est approché : prompt_eval_count compte aussi les tokens du gabarit
+# de conversation (ratio un peu trop bas), mais peut exclure un début de prompt
+# déjà en cache (ratio trop haut). Voir TESTS-A-FAIRE.md.
+# Usage : verifier_ratio modele requete_json prompt_eval_count
+verifier_ratio() {
+  local modele="$1" requete="$2" n_prompt="$3" n_car sys_car
+  [ "$n_prompt" -gt 0 ] || return 0
+  n_car=$(jq '.messages[0].content | length' <<< "$requete")
+  sys_car=$(ollama show "$modele" --system | wc -m)
+  awk -v c=$((n_car + sys_car)) -v t="$n_prompt" -v r="$CAR_PAR_TOKEN" 'BEGIN {
+    ratio = c / t
+    printf "  ratio mesuré : %.2f caractères/token (%d car. / %d tokens)\n", ratio, c, t
+    if (ratio < r)
+      printf "  Attention : ratio mesuré inférieur à CAR_PAR_TOKEN (%s) : le budget de contexte est sous-estimé pour ce document. Réduis CAR_PAR_TOKEN.\n", r
+  }' >&2
+}
+
 # Envoie l'entrée standard au modèle et écrit la réponse sur la sortie standard.
 # Passe par l'API /api/chat plutôt que par « ollama run », qui ne dit pas
 # pourquoi la génération s'est arrêtée. Le SYSTEM et les PARAMETER du Modelfile
@@ -205,6 +226,7 @@ appeler_modele() {
   num_ctx=$(parametre_modele "$modele" num_ctx)
   num_predict=$(parametre_modele "$modele" num_predict)
   echo "  prompt : $n_prompt tokens, réponse : $n_reponse tokens (num_ctx $num_ctx, num_predict $num_predict)" >&2
+  verifier_ratio "$modele" "$requete" "$n_prompt"
 
   if [ "$raison" = "length" ]; then
     erreur "Réponse coupée par num_predict ($n_reponse tokens) : réduis MAX_MOTS ou augmente num_predict. Rien n'est enregistré pour cette tranche."

@@ -101,7 +101,10 @@ ollama API response and **stops without saving anything** for the slice if:
   was wrong and ollama may have truncated the prompt.
 
 The message says which setting to change. Since nothing was saved, resuming
-redoes that slice. Prompt and answer token counts are printed for every call.
+redoes that slice. Prompt and answer token counts are printed for every call,
+along with the prompt's actual chars/token ratio. If that ratio is below
+`CAR_PAR_TOKEN`, a warning suggests lowering `CAR_PAR_TOKEN`: the estimate is not
+conservative for this document (numbers, tables, URLs, code...).
 
 ## Settings (environment variables)
 
