@@ -1,8 +1,8 @@
 # Fonctions communes aux scripts d'extraction (à sourcer, pas à exécuter).
 #
 # Variables d'environnement reconnues :
-#   MAX_MOTS       taille maximale d'une tranche, en mots            (défaut 2000)
-#   MIN_MOTS       taille minimale avant de couper sur un titre      (défaut MAX_MOTS/4)
+#   QUESTION_MAX   longueur maximale prévue d'une question, en caractères, pour
+#                  calculer la taille des tranches au découpage (défaut 500)
 #   CAR_PAR_TOKEN  ratio prudent caractères/token pour les estimations (défaut 2.5 ;
 #                  ~4,3 mesuré sur du français avec gemma4)
 #   MARGE_TOKENS   réserve pour le gabarit de conversation et les en-têtes (défaut 256)
@@ -11,8 +11,7 @@
 #   TEMP_MAX       température (°C) au-delà de laquelle on fait une pause (défaut 90)
 #   OLLAMA_URL     adresse du serveur ollama          (défaut http://127.0.0.1:11434)
 
-MAX_MOTS="${MAX_MOTS:-2000}"
-MIN_MOTS="${MIN_MOTS:-$((MAX_MOTS / 4))}"
+QUESTION_MAX="${QUESTION_MAX:-500}"
 CAR_PAR_TOKEN="${CAR_PAR_TOKEN:-2.5}"
 MARGE_TOKENS="${MARGE_TOKENS:-256}"
 CIBLE_CTX="${CIBLE_CTX:-0.35}"
@@ -84,7 +83,8 @@ prompt_complet() {
 # convertis en caractères avec CAR_PAR_TOKEN.
 # 1. Limite dure, pour que le prompt complet tienne dans le contexte :
 #      num_ctx - k * num_predict - système - texte fixe - marge
-#    texte fixe = sortie de prompt_complet sans extrait ni notes (index compris).
+#    texte fixe = sortie de prompt_complet sans extrait ni notes (index compris),
+#    passé en nombre de caractères.
 #    k = nombre de blocs de taille num_predict à réserver : 1 pour la réponse,
 #    2 en refine (les notes relues sont une réponse précédente, donc bornées par
 #    num_predict, plus la nouvelle réponse).
@@ -92,16 +92,16 @@ prompt_complet() {
 #    éléments et invente bien avant de remplir sa fenêtre ; ce plafond ne porte
 #    que sur l'extrait, la partie que le modèle doit parcourir en entier.
 # Les deux valeurs sont affichées sur la sortie d'erreur.
+# Usage : budget_tranche modele caracteres_texte_fixe k
 budget_tranche() {
-  local modele="$1" fixe="$2" k="$3" num_ctx num_predict sys_car fixe_car
+  local modele="$1" fixe_car="$2" k="$3" num_ctx num_predict sys_car
   num_ctx=$(parametre_modele "$modele" num_ctx)
   num_predict=$(parametre_modele "$modele" num_predict)
   [ -n "$num_ctx" ] || erreur "Le modèle $modele doit définir PARAMETER num_ctx."
   [ -n "$num_predict" ] && [ "$num_predict" -gt 0 ] ||
     erreur "Le modèle $modele doit définir PARAMETER num_predict (> 0) : sans limite de réponse, la taille du prompt ne peut pas être garantie."
   sys_car=$(ollama show "$modele" --system | wc -m)
-  fixe_car=$(printf '%s' "$fixe" | wc -m)
-  awk -v ctx="$num_ctx" -v np="$num_predict" -v k="$k" -v s="$sys_car" \
+  awk -v modele="$modele" -v ctx="$num_ctx" -v np="$num_predict" -v k="$k" -v s="$sys_car" \
       -v f="$fixe_car" -v r="$CAR_PAR_TOKEN" -v m="$MARGE_TOKENS" \
       -v c="$CIBLE_CTX" 'BEGIN {
     if (!(c + 0 > 0 && c + 0 <= 1)) {
@@ -111,47 +111,107 @@ budget_tranche() {
     t = ctx - k * np - int((s + f) / r + 1) - m
     dure = (t > 0 ? int(t * r) : 0)
     cible = int(c * ctx * r)
-    printf "Limites d'\''une tranche : %d caractères (contexte), %d caractères (CIBLE_CTX %s).\n", dure, cible, c > "/dev/stderr"
+    printf "%s : tranche de %d caractères au plus (contexte), %d (CIBLE_CTX %s).\n", modele, dure, cible, c > "/dev/stderr"
     print (dure < cible ? dure : cible)
   }'
 }
 
 # Découpe un document Markdown en tranches dossier/001.md, 002.md...
-# Une tranche ne dépasse jamais max_mots mots ni max_car caractères ; une
-# ligne trop longue est elle-même coupée entre deux mots. On coupe de
-# préférence sur un titre (# ou ##) dès que la tranche a au moins MIN_MOTS mots.
+# Une tranche ne dépasse jamais max_car caractères (fin de ligne comprise) ;
+# une ligne trop longue est elle-même coupée entre deux mots. On coupe de
+# préférence sur un titre (# ou ##) dès que la tranche atteint le quart de
+# max_car.
 decouper() {
-  local src="$1" dossier="$2" max_mots="$3" max_car="$4"
+  local src="$1" dossier="$2" max_car="$3"
   mkdir -p "$dossier"
   rm -f "$dossier"/*.md
-  awk -v max="$max_mots" -v maxc="$max_car" -v min="$MIN_MOTS" -v d="$dossier" '
-  function nouvelle() { if (f != "") close(f); n++; f = sprintf("%s/%03d.md", d, n); w = 0; c = 0 }
-  function ajouter(ligne, nm, nc) {
-    if (w > 0 && (w + nm > max || c + nc + 1 > maxc)) nouvelle()
-    print ligne > f; w += nm; c += nc + 1
+  awk -v maxc="$max_car" -v min="$((max_car / 4))" -v d="$dossier" '
+  function nouvelle() { if (f != "") close(f); n++; f = sprintf("%s/%03d.md", d, n); c = 0 }
+  function ajouter(ligne, nc) {
+    if (c > 0 && c + nc + 1 > maxc) nouvelle()
+    print ligne > f; c += nc + 1
   }
   BEGIN { nouvelle() }
   {
-    if (/^##? / && w >= min && w > 0) nouvelle()
-    if (NF <= max && length($0) < maxc) { ajouter($0, NF, length($0)); next }
+    if (/^##? / && c >= min) nouvelle()
+    if (length($0) < maxc) { ajouter($0, length($0)); next }
     # Ligne trop longue : on la recompose morceau par morceau.
-    morceau = ""; nm = 0
+    morceau = ""
     for (i = 1; i <= NF; i++) {
       mot = $i
       while (length(mot) >= maxc) {            # mot démesuré (URL, base64...)
-        if (nm > 0) { ajouter(morceau, nm, length(morceau)); morceau = ""; nm = 0 }
-        ajouter(substr(mot, 1, maxc - 1), 1, maxc - 1)
+        if (morceau != "") { ajouter(morceau, length(morceau)); morceau = "" }
+        ajouter(substr(mot, 1, maxc - 1), maxc - 1)
         mot = substr(mot, maxc)
       }
-      essai = (nm ? morceau " " mot : mot)
-      if (nm > 0 && (nm + 1 > max || length(essai) >= maxc)) {
-        ajouter(morceau, nm, length(morceau)); essai = mot; nm = 0
+      essai = (morceau != "" ? morceau " " mot : mot)
+      if (morceau != "" && length(essai) >= maxc) {
+        ajouter(morceau, length(morceau)); essai = mot
       }
-      morceau = essai; nm++
+      morceau = essai
     }
-    if (nm > 0) ajouter(morceau, nm, length(morceau))
+    if (morceau != "") ajouter(morceau, length(morceau))
   }' "$src"
 }
+
+# Prépare une série de résultats dans un dossier de travail découpé par
+# decouper.sh. Une série (dossier travail/<nom>) regroupe les réponses à une
+# question, un fichier par tranche, nommé comme la tranche (012.md).
+# L'en-tête (mode, langue, question) est enregistré dans <nom>/question.txt :
+# une série ne peut pas être reprise avec un autre en-tête.
+# Définit les variables globales :
+#   SERIE     dossier de la série
+#   DE, A     numéros de la première et de la dernière tranche traitées
+#   TRANCHES  fichiers des tranches DE à A, dans l'ordre
+# À appeler directement (pas dans $(...)), sinon les variables sont perdues.
+# Usage : preparer_serie travail nom entete [de] [a]
+preparer_serie() {
+  local travail="$1" nom="$2" entete="$3" toutes nb
+  DE="${4:-1}"
+  [ -f "$travail/decoupage.txt" ] ||
+    erreur "$travail n'est pas un dossier de travail : lance d'abord decouper.sh."
+  case "$nom" in
+    "" | */* | . | .. | tranches) erreur "Nom de série invalide : $nom" ;;
+  esac
+  mapfile -t toutes < <(find "$travail/tranches" -maxdepth 1 -type f -name '*.md' | sort -V)
+  nb=${#toutes[@]}
+  [ "$nb" -gt 0 ] || erreur "Aucune tranche dans $travail/tranches."
+  A="${5:-$nb}"
+  [[ "$DE" =~ ^[0-9]+$ && "$A" =~ ^[0-9]+$ ]] || erreur "Intervalle invalide : $DE à $A."
+  DE=$((10#$DE)); A=$((10#$A))
+  [ "$DE" -ge 1 ] && [ "$DE" -le "$A" ] && [ "$A" -le "$nb" ] ||
+    erreur "Intervalle invalide : $DE à $A (tranches 1 à $nb)."
+  TRANCHES=("${toutes[@]:DE-1:A-DE+1}")
+
+  SERIE="$travail/$nom"
+  mkdir -p "$SERIE"
+  if [ -f "$SERIE/question.txt" ]; then
+    [ "$(cat "$SERIE/question.txt")" = "$entete" ] ||
+      erreur "La série $SERIE a été créée pour une autre question ou un autre mode (voir $SERIE/question.txt) : choisis un autre nom de série."
+  else
+    printf '%s\n' "$entete" > "$SERIE/question.txt"
+  fi
+  echo "Série $SERIE, tranches $DE à $A (sur $nb)." >&2
+}
+
+# Vérifie que chaque tranche de TRANCHES tient dans le budget de ce modèle
+# pour cette question. Le découpage a été dimensionné pour une question d'au
+# plus QUESTION_MAX caractères ; une question plus longue, ou un modèle avec
+# moins de contexte, peut ne plus convenir.
+# Usage : verifier_tranches modele caracteres_texte_fixe k
+verifier_tranches() {
+  local modele="$1" fixe_car="$2" k="$3" max f n plus_grande=0 laquelle=""
+  max=$(budget_tranche "$modele" "$fixe_car" "$k")
+  for f in "${TRANCHES[@]}"; do
+    n=$(wc -m < "$f")
+    if [ "$n" -gt "$plus_grande" ]; then plus_grande=$n; laquelle=$f; fi
+  done
+  [ "$plus_grande" -le "$max" ] ||
+    erreur "La tranche $laquelle fait $plus_grande caractères, $max au plus pour $modele avec cette question. Raccourcis la question, ou redécoupe le document dans un autre dossier de travail avec une taille plus petite (decouper.sh -t)."
+}
+
+# Numéro sur trois chiffres : 7 -> 007.
+num() { printf '%03d' "$1"; }
 
 verifier_batterie() {
   local bat niveau statut
@@ -245,10 +305,10 @@ appeler_modele() {
   verifier_ratio "$modele" "$requete" "$n_prompt"
 
   if [ "$raison" = "length" ]; then
-    erreur "Réponse coupée par num_predict ($n_reponse tokens) : réduis MAX_MOTS ou augmente num_predict. Rien n'est enregistré pour cette tranche."
+    erreur "Réponse coupée par num_predict ($n_reponse tokens) : augmente num_predict, ou redécoupe le document avec des tranches plus petites (decouper.sh -t). Rien n'est enregistré pour cette tranche."
   fi
   if [ $((n_prompt + num_predict)) -gt "$num_ctx" ]; then
-    erreur "Prompt de $n_prompt tokens + num_predict $num_predict > num_ctx $num_ctx : le prompt a pu être tronqué. Réduis CAR_PAR_TOKEN ou MAX_MOTS. Rien n'est enregistré pour cette tranche."
+    erreur "Prompt de $n_prompt tokens + num_predict $num_predict > num_ctx $num_ctx : le prompt a pu être tronqué. Réduis CAR_PAR_TOKEN et redécoupe le document. Rien n'est enregistré pour cette tranche."
   fi
   jq -r '.message.content // ""' <<< "$reponse"
 }

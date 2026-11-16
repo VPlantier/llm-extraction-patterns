@@ -2,13 +2,15 @@
 
 Scripts bash pour extraire d'un long document Markdown ce qui répond à une
 question, avec un modèle local servi par [ollama](https://ollama.com).
-Le document est découpé en tranches, puis traité selon l'un des trois modes ci-dessous.
+Le document est d'abord découpé en tranches, une fois pour toutes, dans un
+dossier de travail. Chaque question est ensuite traitée sur ces tranches selon
+l'un des trois modes ci-dessous.
 
-| Mode | Dossier | Principe | Résultat |
+| Mode | Dossier | Principe | Résultat (dans `travail/<série>/`) |
 |------|---------|----------|----------|
-| refine | `refine/` | Chaque tranche est lue avec les notes précédentes, que le modèle réécrit. | `note_NNN.md` (versions successives), `fusion.md` |
-| map-reduce | `map-reduce/` | Chaque tranche est traitée isolément, sans renvoyer les résultats précédents, puis les résultats sont fusionnés. | `map/NNN.md`, `final.md` |
-| premier-dernier | `premier-dernier/` | Trouve le premier et le dernier élément du document qui satisfont un critère. | `final.md` (deux lignes) |
+| refine | `refine/` | Chaque tranche est lue avec les notes précédentes, que le modèle réécrit. | `NNN.md` (notes après la tranche NNN), `fusion_<de>-<à>.md` |
+| map-reduce | `map-reduce/` | Chaque tranche est traitée isolément, sans renvoyer les résultats précédents, puis les résultats sont fusionnés. | `NNN.md` (réponse pour la tranche NNN), `final_<de>-<à>.md` |
+| premier-dernier | `premier-dernier/` | Trouve le premier et le dernier élément qui satisfont un critère. | `NNN.md` (tranches analysées), `final_<de>-<à>.md` (deux lignes) |
 
 Chaque dossier contient un script et deux définitions d'agent (`<mode>-fr.Modelfile`,
 `<mode>-en.Modelfile`). Le nom du modèle ollama est celui du fichier.
@@ -27,27 +29,75 @@ appellent l'API d'ollama à l'adresse `OLLAMA_URL` (par défaut `http://127.0.0.
 
 ## Utilisation
 
+### 1. Découper le document : `decouper.sh`
+
 ```bash
-refine/refine.sh fr debats.md "Quels sujets sont débattus ? Indique la température du débat de 0° à 100°."
-map-reduce/map-reduce.sh fr debats.md "Quels sujets sont débattus ? Indique la température du débat de 0° à 100°."
-premier-dernier/premier-dernier.sh fr dictionnaire.md "un mot qui désigne une forme de nourriture"
+./decouper.sh [-t taille] [-m modèle]... document.md dossier_de_travail
 ```
 
-Un quatrième argument facultatif donne le dossier de sortie (par défaut `resultats-<mode>`).
-Les scripts reprennent là où ils se sont arrêtés : une étape dont le fichier
-existe déjà est sautée. Pour repartir de zéro, supprime le dossier de sortie.
-Une reprise suppose que le document et les réglages n'ont pas changé, sinon les tranches ne correspondent plus.
+Les tranches sont écrites dans `dossier_de_travail/tranches/001.md`, `002.md`...
+et les paramètres du découpage dans `dossier_de_travail/decoupage.txt`.
+
+- Sans `-t`, la taille (en caractères) est la plus grande qui convienne à tous les
+  modèles installés, pour une question d'au plus `QUESTION_MAX` caractères. Le
+  script affiche les limites de chaque modèle.
+- Avec `-t`, la taille donnée est refusée si elle dépasse ce maximum.
+- `-m` (répétable) restreint le calcul aux modèles que l'on compte utiliser.
+
+Un dossier de travail ne se redécoupe pas : les numéros de tranches sont des
+références stables pour toutes les séries de résultats. Pour un autre découpage,
+on crée un autre dossier de travail.
+
+On coupe de préférence sur un titre `#` ou `##` dès que la tranche atteint le
+quart de la taille. Une ligne trop longue est coupée entre deux mots.
+
+### 2. Poser une question : une série par question
+
+```bash
+refine/refine.sh [-d de] [-a à] fr|en dossier_de_travail série "question"
+map-reduce/map-reduce.sh [-d de] [-a à] fr|en dossier_de_travail série "question"
+premier-dernier/premier-dernier.sh [-d de] [-a à] fr|en dossier_de_travail série "critère"
+```
+
+- Les résultats vont dans `dossier_de_travail/série/`, un fichier par tranche, nommé
+  comme la tranche. Plusieurs questions peuvent ainsi porter sur les mêmes tranches,
+  chacune dans sa série.
+- Le mode, la langue et la question sont enregistrés dans `série/question.txt` : une
+  série ne peut pas être reprise avec une autre question.
+- `-d` et `-a` limitent le traitement aux tranches `de` à `à` (par défaut, toutes).
+- Avant de commencer, le script vérifie que chaque tranche de l'intervalle tient dans
+  le contexte du modèle avec cette question. Sinon, il s'arrête : il faut raccourcir
+  la question ou redécouper dans un autre dossier de travail.
+
+Les scripts reprennent là où ils se sont arrêtés : une tranche dont le fichier
+existe déjà est sautée. Pour refaire une tranche, supprime son fichier.
 
 Avant chaque appel, le script s'arrête si la batterie est sous 20 % et non
 branchée. Il fait aussi une pause tant que la température CPU/GPU atteint `TEMP_MAX`.
 
+### 3. Approfondir sur un intervalle
+
+Une fois un élément repéré dans la tranche n, on peut poser une question plus
+précise sur un intervalle étroit autour de n, dans une nouvelle série. En refine,
+les notes de départ sont le fichier qui précède la première tranche : `000.md`
+sans `-d`, `011.md` avec `-d 12`. S'il existe, il est utilisé tel quel. On peut
+donc l'écrire ou le corriger à la main avant de lancer le script. Sinon, il est
+créé vide.
+
+Reprendre la main entre deux passages, plutôt que d'enchaîner automatiquement les
+résultats du modèle, évite d'accumuler ses hallucinations.
+
 ## Exemple
 
-`exemples/debats.md` est un court compte rendu de débats. Les petites valeurs de `MAX_MOTS`/`MIN_MOTS` le découpent en 4 tranches :
+`exemples/debats.md` est un court compte rendu de débats. Une petite taille le découpe en 4 tranches :
 
 ```bash
-MAX_MOTS=80 MIN_MOTS=20 refine/refine.sh fr exemples/debats.md "Quels sujets sont débattus ? Pour chaque sujet, indique la température du débat entre 0° (calme) et 100° (très houleux)."
-MAX_MOTS=80 MIN_MOTS=20 premier-dernier/premier-dernier.sh fr exemples/debats.md "un mot qui désigne une forme de nourriture ou d'aliment"
+./decouper.sh -t 300 exemples/debats.md travail-debats
+refine/refine.sh fr travail-debats temperature "Quels sujets sont débattus ? Pour chaque sujet, indique la température du débat entre 0° (calme) et 100° (très houleux)."
+premier-dernier/premier-dernier.sh fr travail-debats nourriture "un mot qui désigne une forme de nourriture ou d'aliment"
+# Puis, sur la séance du 13 mars (tranches 3 et 4) seulement, avec des notes de
+# départ écrites à la main dans travail-debats/fonciere/002.md :
+refine/refine.sh -d 3 -a 4 fr travail-debats fonciere "Quelles positions sont exprimées sur la contribution foncière ?"
 ```
 
 ## Format des résultats
@@ -74,23 +124,22 @@ Il garde chaque élément de liste dans l'ordre de première apparition et ignor
 une ligne identique déjà vue. Les espaces et la puce `*`/`-` sont normalisés.
 Le titre retenu est le plus fréquent, sauf si `-t` en impose un.
 
-- En refine, il est lancé automatiquement sur toutes les versions des notes (`fusion.md`). Il récupère ainsi les éléments que le modèle a perdus ou modifiés en route.
-- En map-reduce, il constitue l'étape *reduce* (`final.md`).
+- En refine, il est lancé automatiquement sur les notes de l'intervalle, notes de départ comprises (`fusion_<de>-<à>.md`). Il récupère ainsi les éléments que le modèle a perdus ou modifiés en route.
+- En map-reduce, il constitue l'étape *reduce* (`final_<de>-<à>.md`).
 
 ## Garantie de la taille du contexte
 
-ollama tronque sans prévenir un prompt plus long que `num_ctx`. Les scripts
-bornent donc la taille de chaque tranche :
+ollama tronque sans prévenir un prompt plus long que `num_ctx`. La taille des
+tranches est donc bornée, pour chaque modèle :
 
 ```
 max_car = (num_ctx − k × num_predict − système − texte fixe − MARGE_TOKENS) × CAR_PAR_TOKEN
 ```
 
 - `num_ctx`, `num_predict` et le prompt système sont lus dans le modèle (`ollama show`).
-- Le texte fixe est le prompt produit par `prompt_complet` (`lib/commun.sh`) sans extrait ni notes, avec un index fictif de 5 chiffres : section `=== VARIABLE ===` / `index=<n>` (numéro de la tranche, 43 pour `043.md`) en tête, titres de sections, question et consigne.
+- Le texte fixe est le prompt produit par `prompt_complet` (`lib/commun.sh`) sans extrait ni notes, avec un index fictif de 5 chiffres : section `=== VARIABLE ===` / `index=<n>` (numéro de la tranche, 43 pour `043.md`) en tête, titres de sections, question et consigne. Au découpage, la question n'est pas encore connue : on compte `QUESTION_MAX` caractères pour elle, plus 500 pour le reste.
 - `k = 1` (réservation pour la réponse). En refine, `k = 2` : les notes relues sont une réponse précédente, donc bornées par `num_predict`.
 - `CAR_PAR_TOKEN` vaut 2,5 par défaut, un ratio prudent : on mesure environ 4,3 caractères par token sur du français avec gemma4.
-- Une tranche ne dépasse jamais `MAX_MOTS` mots ni `max_car` caractères. Une ligne trop longue (un paragraphe entier sur une ligne, par exemple) est coupée entre deux mots.
 
 C'est pourquoi chaque Modelfile doit définir `num_predict`.
 
@@ -102,11 +151,14 @@ plafond limite donc l'extrait à une part du contexte :
 max_car_cible = CIBLE_CTX × num_ctx × CAR_PAR_TOKEN
 ```
 
-La tranche prend la plus petite des deux valeurs (et ne dépasse jamais `MAX_MOTS`
-mots). Les deux limites sont affichées au lancement. Avec les réglages par défaut,
-c'est `CIBLE_CTX` qui l'emporte (environ 10 700 caractères).
+La limite d'un modèle est la plus petite des deux valeurs. `decouper.sh` prend la
+plus petite limite des modèles retenus. Avec les réglages par défaut, c'est
+`CIBLE_CTX` qui l'emporte (environ 10 700 caractères).
 
-Ce calcul repose sur une estimation. Après chaque appel, le script lit donc la
+Ce calcul est refait à chaque lancement d'un mode avec la vraie question : si une
+tranche de l'intervalle dépasse, le script s'arrête avant tout appel.
+
+Il repose sur une estimation. Après chaque appel, le script lit donc la
 réponse de l'API d'ollama et **s'arrête sans rien enregistrer** pour la tranche si :
 
 - la réponse a été coupée par `num_predict` (`done_reason` = `length`) ;
@@ -124,33 +176,42 @@ tableaux, URL, code...).
 
 | Variable | Défaut | Rôle |
 |----------|--------|------|
-| `MAX_MOTS` | 2000 | taille maximale d'une tranche, en mots |
-| `MIN_MOTS` | `MAX_MOTS/4` | on ne coupe sur un titre `#`/`##` qu'au-delà de cette taille, pour éviter les tranches minuscules |
+| `QUESTION_MAX` | 500 | longueur maximale prévue d'une question, en caractères (découpage) |
 | `CAR_PAR_TOKEN` | 2.5 | ratio prudent caractères/token |
 | `MARGE_TOKENS` | 256 | réserve pour le gabarit de conversation |
 | `CIBLE_CTX` | 0.35 | part maximale de `num_ctx` occupée par l'extrait (entre 0 et 1) |
 | `TEMP_MAX` | 90 | température (°C) déclenchant une pause |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | adresse du serveur ollama |
 
-Exemple : `MAX_MOTS=1000 refine/refine.sh fr doc.md "..."`.
+Exemple : `CIBLE_CTX=0.25 ./decouper.sh doc.md travail-doc`.
 
 ## Premier-dernier : fonctionnement
 
 Le modèle liste dans l'ordre tous les éléments de la tranche qui satisfont le
 critère, et le script garde le premier (ou le dernier) de cette liste.
-Pour le premier, on parcourt les tranches depuis le début jusqu'à trouver un élément.
+Pour le premier, on parcourt les tranches de l'intervalle depuis le début jusqu'à trouver un élément.
 Pour le dernier, on part de la fin, sans remonter avant la tranche du premier.
-Les réponses sont mises en cache dans `reponses/`. Une tranche très dense
+Seules les tranches nécessaires sont analysées. Une tranche très dense
 (un dictionnaire, par exemple) peut atteindre la limite `num_predict` : le script
-s'arrête alors, et il faut réduire `MAX_MOTS`.
+s'arrête alors, et il faut redécouper avec une taille plus petite.
 
 ## Organisation
 
 ```
-lib/commun.sh        découpage, budget de contexte, batterie, température, appel ollama
+decouper.sh          découpage d'un document dans un dossier de travail
 fusion.sh            fusion sans doublons (refine et map-reduce)
+lib/commun.sh        découpage, séries, budget de contexte, batterie, température, appel ollama
 refine/              refine.sh, refine-fr.Modelfile, refine-en.Modelfile
 map-reduce/          map-reduce.sh, map-reduce-fr.Modelfile, map-reduce-en.Modelfile
 premier-dernier/     premier-dernier.sh, premier-dernier-fr.Modelfile, premier-dernier-en.Modelfile
 exemples/            document de test
+```
+
+Dossier de travail :
+
+```
+travail/
+  decoupage.txt      document, taille, modèles retenus, nombre de tranches
+  tranches/          001.md, 002.md...
+  <série>/           question.txt, 000.md (refine : notes de départ), 001.md..., final_ ou fusion_<de>-<à>.md
 ```
