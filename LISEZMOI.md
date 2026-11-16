@@ -182,6 +182,7 @@ tableaux, URL, code...).
 | `CIBLE_CTX` | 0.35 | part maximale de `num_ctx` occupée par l'extrait (entre 0 et 1) |
 | `TEMP_MAX` | 90 | température (°C) déclenchant une pause |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | adresse du serveur ollama |
+| `DEBUG_DOSSIER` | (vide) | si défini, chaque appel y enregistre sa requête (`.requete.json`, rejouable avec `curl`), le prompt lisible (`.prompt.txt`) et la réponse brute d'ollama (`.reponse.json`) |
 
 Exemple : `CIBLE_CTX=0.25 ./decouper.sh doc.md travail-doc`.
 

@@ -10,6 +10,8 @@
 #                  qualité de l'extraction (défaut 0.35)
 #   TEMP_MAX       température (°C) au-delà de laquelle on fait une pause (défaut 90)
 #   OLLAMA_URL     adresse du serveur ollama          (défaut http://127.0.0.1:11434)
+#   DEBUG_DOSSIER  si défini, dossier où chaque appel enregistre sa requête et
+#                  la réponse brute d'ollama (voir appeler_modele)
 
 QUESTION_MAX="${QUESTION_MAX:-500}"
 CAR_PAR_TOKEN="${CAR_PAR_TOKEN:-2.5}"
@@ -287,14 +289,33 @@ verifier_ratio() {
 # Limite connue : si ollama réutilise un début de prompt déjà en cache,
 # prompt_eval_count peut ne compter que la partie nouvelle, et le second
 # contrôle peut alors manquer un dépassement (à vérifier, voir TESTS-A-FAIRE.md).
+#
+# Si DEBUG_DOSSIER est défini, chaque appel y laisse trois fichiers, préfixés
+# par la date, le modèle et le numéro de tranche (lu dans « index=<n> ») :
+#   .requete.json  requête envoyée (rejouable avec curl --data-binary @fichier)
+#   .prompt.txt    texte du message, lisible
+#   .reponse.json  réponse complète d'ollama, même si l'appel est rejeté
 appeler_modele() {
   local modele="$1" requete reponse champs raison n_prompt n_reponse num_ctx num_predict
+  local base="" index ok
   requete=$(jq -Rs --arg m "$modele" \
     '{model: $m, messages: [{role: "user", content: .}], stream: false, think: false}') ||
     erreur "Impossible de construire la requête JSON."
-  reponse=$(curl -sS --fail-with-body -X POST "$OLLAMA_URL/api/chat" \
-    -H 'Content-Type: application/json' --data-binary @- <<< "$requete") ||
-    erreur "Échec de l'appel à ollama ($OLLAMA_URL) : ${reponse:-pas de réponse}"
+  if [ -n "${DEBUG_DOSSIER:-}" ]; then
+    mkdir -p "$DEBUG_DOSSIER"
+    index=$(jq -r '.messages[0].content' <<< "$requete" | sed -n 's/^index=\([0-9][0-9]*\)$/\1/p' | head -n 1)
+    base="$DEBUG_DOSSIER/$(date '+%Y%m%d-%H%M%S')-$BASHPID-$modele-tranche${index:-x}"
+    printf '%s\n' "$requete" > "$base.requete.json"
+    jq -r '.messages[0].content' <<< "$requete" > "$base.prompt.txt"
+  fi
+  if reponse=$(curl -sS --fail-with-body -X POST "$OLLAMA_URL/api/chat" \
+      -H 'Content-Type: application/json' --data-binary @- <<< "$requete"); then
+    ok=1
+  else
+    ok=0
+  fi
+  if [ -n "$base" ]; then printf '%s\n' "$reponse" > "$base.reponse.json"; fi
+  [ "$ok" -eq 1 ] || erreur "Échec de l'appel à ollama ($OLLAMA_URL) : ${reponse:-pas de réponse}"
 
   champs=$(jq -r '[.done_reason // "", .prompt_eval_count // 0, .eval_count // 0] | @tsv' <<< "$reponse") ||
     erreur "Réponse d'ollama illisible : $reponse"

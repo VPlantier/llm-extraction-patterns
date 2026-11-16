@@ -177,6 +177,7 @@ conservative for this document (numbers, tables, URLs, code...).
 | `CIBLE_CTX` | 0.35 | max share of `num_ctx` taken by the excerpt (between 0 and 1) |
 | `TEMP_MAX` | 90 | temperature (°C) that triggers a pause |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | ollama server address |
+| `DEBUG_DOSSIER` | (empty) | when set, every call saves its request (`.requete.json`, replayable with `curl`), the readable prompt (`.prompt.txt`) and ollama's raw response (`.reponse.json`) there |
 
 ## First-last: how it works
 
