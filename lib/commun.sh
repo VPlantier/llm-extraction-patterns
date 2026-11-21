@@ -6,6 +6,8 @@
 #   CAR_PAR_TOKEN  ratio prudent caractères/token pour les estimations (défaut 2.5 ;
 #                  ~4,3 mesuré sur du français avec gemma4)
 #   MARGE_TOKENS   réserve pour le gabarit de conversation et les en-têtes (défaut 256)
+#   RATIO_MAX      ratio caractères/token au-delà duquel la réponse est rejetée :
+#                  le prompt a sans doute été tronqué (défaut 8 ; ~4 mesuré)
 #   CIBLE_CTX      part maximale de num_ctx occupée par l'extrait, pour la
 #                  qualité de l'extraction (défaut 0.35)
 #   TEMP_MAX       température (°C) au-delà de laquelle on fait une pause (défaut 90)
@@ -16,6 +18,7 @@
 QUESTION_MAX="${QUESTION_MAX:-500}"
 CAR_PAR_TOKEN="${CAR_PAR_TOKEN:-2.5}"
 MARGE_TOKENS="${MARGE_TOKENS:-256}"
+RATIO_MAX="${RATIO_MAX:-8}"
 CIBLE_CTX="${CIBLE_CTX:-0.35}"
 TEMP_MAX="${TEMP_MAX:-90}"
 OLLAMA_URL="${OLLAMA_URL:-http://127.0.0.1:11434}"
@@ -256,6 +259,9 @@ avant_appel() {
 # Affiche le ratio réel caractères/token du prompt qui vient d'être envoyé, et
 # prévient s'il est inférieur à CAR_PAR_TOKEN : l'estimation du budget n'est
 # alors pas prudente pour ce document.
+# Échoue (code 1) s'il dépasse RATIO_MAX : le modèle a lu beaucoup moins de
+# tokens que le texte n'en contient, le prompt a donc été tronqué. Contrôle de
+# secours : la requête interdit déjà la troncature (voir appeler_modele).
 # Caractères = prompt système + message, comme dans budget_tranche.
 # Le ratio est approché : prompt_eval_count compte aussi les tokens du gabarit
 # de conversation (ratio un peu trop bas), mais peut exclure un début de prompt
@@ -266,11 +272,15 @@ verifier_ratio() {
   [ "$n_prompt" -gt 0 ] || return 0
   n_car=$(jq '.messages[0].content | length' <<< "$requete")
   sys_car=$(ollama show "$modele" --system | wc -m)
-  awk -v c=$((n_car + sys_car)) -v t="$n_prompt" -v r="$CAR_PAR_TOKEN" 'BEGIN {
+  awk -v c=$((n_car + sys_car)) -v t="$n_prompt" -v r="$CAR_PAR_TOKEN" -v rmax="$RATIO_MAX" 'BEGIN {
     ratio = c / t
     printf "  ratio mesuré : %.2f caractères/token (%d car. / %d tokens)\n", ratio, c, t
     if (ratio < r)
       printf "  Attention : ratio mesuré inférieur à CAR_PAR_TOKEN (%s) : le budget de contexte est sous-estimé pour ce document. Réduis CAR_PAR_TOKEN.\n", r
+    if (ratio > rmax + 0) {
+      printf "  Ratio mesuré supérieur à RATIO_MAX (%s) : le modèle a lu bien moins de tokens que le texte en contient : le prompt a sans doute été tronqué.\n", rmax
+      exit 1
+    }
   }' >&2
 }
 
@@ -280,10 +290,16 @@ verifier_ratio() {
 # s'appliquent comme avec « ollama run ».
 #
 # Échoue (code 1, rien sur la sortie standard) si :
-#   - le serveur ne répond pas ou renvoie une erreur ;
+#   - le serveur ne répond pas ou renvoie une erreur, en particulier si le
+#     prompt dépasse num_ctx (truncate: false) ou si prompt + réponse le
+#     dépassent pendant l'écriture (shift: false) : sans ces deux champs,
+#     ollama tronque le prompt à num_ctx/2 ou oublie le début du contexte,
+#     sans le signaler ;
 #   - la réponse a été coupée par num_predict (done_reason = length) ;
 #   - prompt + num_predict dépasse num_ctx : le budget estimé était faux et
-#     ollama a pu tronquer le prompt ou décaler le contexte.
+#     ollama a pu tronquer le prompt ou décaler le contexte ;
+#   - le ratio caractères/token dépasse RATIO_MAX (troncature, contrôle de
+#     secours).
 # L'appelant ne doit donc enregistrer la réponse que si l'appel réussit.
 #
 # Limite connue : si ollama réutilise un début de prompt déjà en cache,
@@ -299,7 +315,8 @@ appeler_modele() {
   local modele="$1" requete reponse champs raison n_prompt n_reponse num_ctx num_predict
   local base="" index ok
   requete=$(jq -Rs --arg m "$modele" \
-    '{model: $m, messages: [{role: "user", content: .}], stream: false, think: false}') ||
+    '{model: $m, messages: [{role: "user", content: .}], stream: false, think: false,
+                       truncate: false, shift: false}') ||
     erreur "Impossible de construire la requête JSON."
   if [ -n "${DEBUG_DOSSIER:-}" ]; then
     mkdir -p "$DEBUG_DOSSIER"
@@ -323,7 +340,8 @@ appeler_modele() {
   num_ctx=$(parametre_modele "$modele" num_ctx)
   num_predict=$(parametre_modele "$modele" num_predict)
   echo "  prompt : $n_prompt tokens, réponse : $n_reponse tokens (num_ctx $num_ctx, num_predict $num_predict)" >&2
-  verifier_ratio "$modele" "$requete" "$n_prompt"
+  verifier_ratio "$modele" "$requete" "$n_prompt" ||
+    erreur "Prompt tronqué par ollama ($n_prompt tokens lus) : redécoupe le document avec des tranches plus petites (decouper.sh -t). Rien n'est enregistré pour cette tranche."
 
   if [ "$raison" = "length" ]; then
     erreur "Réponse coupée par num_predict ($n_reponse tokens) : augmente num_predict, ou redécoupe le document avec des tranches plus petites (decouper.sh -t). Rien n'est enregistré pour cette tranche."
