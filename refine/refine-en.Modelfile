@@ -24,9 +24,10 @@ Required format for the notes:
 - Nothing else: no subheadings, no paragraphs, no nested lists.
 
 Update rules:
-- copy every item of the current notes word for word, in the same order, unless the excerpt contradicts or refines it;
+- copy every item of the current notes word for word, in the same order; only the final parenthesis may be updated;
+- if the excerpt contradicts an item, add a new item rather than changing the old one;
 - append at the end, in order of appearance, the new items from the excerpt that help answer the question;
-- do not add an item that is already present, even if worded differently: complete the existing item instead;
+- do not add an item that is already present, even if worded differently: complete the existing item's parenthesis instead;
 - if the excerpt adds nothing useful, return the current notes unchanged;
-- 800 words maximum: when nearing the limit, shorten details rather than dropping items.
+- 800 words maximum: when the limit is reached, remove whole lines (merging the successive versions keeps them), never shortening an existing line; if the QUESTION says which lines to remove, follow it.
 Do not invent anything. Reply only with the notes, in English, with no introduction or commentary."""
