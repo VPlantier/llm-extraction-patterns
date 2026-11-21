@@ -72,8 +72,27 @@ premier-dernier/premier-dernier.sh [-d de] [-a à] fr|en dossier_de_travail sér
 Les scripts reprennent là où ils se sont arrêtés : une tranche dont le fichier
 existe déjà est sautée. Pour refaire une tranche, supprime son fichier.
 
-Avant chaque appel, le script s'arrête si la batterie est sous 20 % et non
-branchée. Il fait aussi une pause tant que la température CPU/GPU atteint `TEMP_MAX`.
+Au lancement, le script affiche les mesures du matériel (nombre de capteurs de
+température, la plus haute, état de la batterie). Avant chaque appel, il s'arrête
+si la batterie est sous 20 % et non branchée, et fait une pause tant que la
+température atteint `TEMP_MAX` ; si elle y reste plus de `PAUSE_MAX` secondes, il
+s'arrête (une reprise repart de la tranche en cours). Les températures sont lues
+dans tous les capteurs de Linux (`/sys/class/hwmon` : processeur, GPU AMD ou Intel,
+SSD... ; `/sys/class/thermal`) et par `nvidia-smi` s'il est installé.
+
+**Pas de mesure fiable, pas d'appel au modèle** : le script s'arrête avec un message
+si aucun capteur de température n'est trouvé (autre système que Linux, par exemple),
+si un capteur est illisible ou donne une valeur impossible (hors de 1 à 124 °C,
+comme le 127 °C d'un capteur en panne), si `nvidia-smi` est en erreur, ou si une
+batterie est illisible. Un ordinateur sans batterie est accepté.
+
+Chaque appel affiche la vitesse de génération (tokens/s). Quand un appel vient de
+charger le modèle, le script vérifie dans le journal d'ollama (`journalctl -u ollama`)
+que le modèle tient entièrement dans la mémoire du GPU, et prévient sinon : ollama
+place alors une partie des couches sur le processeur, sans erreur, et le modèle
+ralentit. `ollama ps` n'est pas fiable pour cela (il peut afficher « 100% GPU » à tort).
+Sans accès au journal (ollama lancé à la main avec `ollama serve`), le contrôle est
+sauté avec un message.
 
 ### 3. Approfondir sur un intervalle
 
@@ -158,12 +177,17 @@ plus petite limite des modèles retenus. Avec les réglages par défaut, c'est
 Ce calcul est refait à chaque lancement d'un mode avec la vraie question : si une
 tranche de l'intervalle dépasse, le script s'arrête avant tout appel.
 
-Il repose sur une estimation. Après chaque appel, le script lit donc la
-réponse de l'API d'ollama et **s'arrête sans rien enregistrer** pour la tranche si :
+Il repose sur une estimation. La requête interdit donc à ollama de tronquer le
+prompt (`truncate: false`) ou d'oublier le début du contexte pendant l'écriture
+(`shift: false`) : sans ces champs, ollama coupe en silence un prompt trop long à la
+moitié de `num_ctx`. Le script **s'arrête sans rien enregistrer** pour la tranche si :
 
+- ollama refuse la requête parce qu'elle dépasse le contexte ;
 - la réponse a été coupée par `num_predict` (`done_reason` = `length`) ;
 - le prompt réel (`prompt_eval_count`) + `num_predict` dépasse `num_ctx` : l'estimation
-  était fausse et ollama a pu tronquer le prompt.
+  était fausse ;
+- le ratio caractères/token dépasse `RATIO_MAX` : le modèle a lu bien moins de tokens
+  que le texte n'en contient, le prompt a été tronqué (contrôle de secours).
 
 Le message indique quel réglage modifier. Comme rien n'a été enregistré, une
 reprise refait cette tranche. Les nombres de tokens du prompt et de la réponse
@@ -179,8 +203,10 @@ tableaux, URL, code...).
 | `QUESTION_MAX` | 500 | longueur maximale prévue d'une question, en caractères (découpage) |
 | `CAR_PAR_TOKEN` | 2.5 | ratio prudent caractères/token |
 | `MARGE_TOKENS` | 256 | réserve pour le gabarit de conversation |
+| `RATIO_MAX` | 8 | ratio caractères/token au-delà duquel la réponse est rejetée (prompt tronqué) |
 | `CIBLE_CTX` | 0.35 | part maximale de `num_ctx` occupée par l'extrait (entre 0 et 1) |
 | `TEMP_MAX` | 90 | température (°C) déclenchant une pause |
+| `PAUSE_MAX` | 600 | durée maximale (s) d'une pause pour température, avant arrêt |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | adresse du serveur ollama |
 | `DEBUG_DOSSIER` | (vide) | si défini, chaque appel y enregistre sa requête (`.requete.json`, rejouable avec `curl`), le prompt lisible (`.prompt.txt`) et la réponse brute d'ollama (`.reponse.json`) |
 

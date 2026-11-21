@@ -121,20 +121,25 @@ Les commandes se lancent depuis la racine du dépôt, sous Linux.
   ```bash
   for i in $(seq 120); do cat exemples/debats.md; echo; done > exemples-long.md
   ```
-- Documents réels, dans `documents/` (non versionné ; il faut `pandoc`) :
+- Documents réels, dans `documents/` (non versionné), à choisir proches des documents
+  réellement traités :
+  - **long débat** (tests 6.4, 6.5, 7.4, 8.x) : un compte rendu de séance parlementaire
+    d'environ 120 000 caractères, qui donne une douzaine de tranches sans `-t` ;
+  - **document riche en tableaux**, chiffres ou URL (test 5.5) ;
+  - **liste dense** (test 7.2) : un dictionnaire, avec un critère étroit (« un poisson »)
+    plutôt que « nourriture ».
   ```bash
-  mkdir -p documents
-  # Tests 6.5, 7.4, 8.x : long débat (référence de température : les « (Exclamations...) »,
-  # « (Protestations...) » notées dans le texte). Couper à la main le menu et le pied de page.
-  curl -sL "https://www.assemblee-nationale.fr/dyn/17/comptes-rendus/seance/session-ordinaire-de-2025-2026/premiere-seance-du-vendredi-24-octobre-2025" \
-    | pandoc -f html -t gfm -o documents/seance.md
-  # Test 7.2 : liste dense, avec un critère étroit (« un poisson »), pas « nourriture ».
-  for l in B G J; do
-    curl -sL "https://fr.wikisource.org/wiki/Dumas.-_Grand_dictionnaire_de_cuisine,_1873/Index_alphab%C3%A9tique_-_$l?action=render" | pandoc -f html -t gfm
-  done > documents/dumas.md
+  ./decouper.sh documents/seance.md travail-seance
   ```
-  Test 5.5 : prendre un document chiffré proche des documents réellement traités (ou un
-  article Wikipédia en tableaux, converti de la même façon avec `?action=render`).
+  Référence de température : relever les marques de tumulte notées dans le compte rendu
+  (selon l'époque : « (Exclamations...) », « (Protestations...) », « (Murmures.) »,
+  « (On applaudit...) », « bruit », « agitation »...), par exemple :
+  ```bash
+  grep -n -oiE 'exclamation|protestation|murmure|applaudi|tumulte|agitation|bruit' travail-seance/tranches/*.md
+  ```
+  Une tranche sans aucune de ces marques doit avoir une température basse ; les tranches
+  où elles se regroupent, une température plus haute. Il en faut une dizaine au moins
+  pour que le test soit probant.
 - **Modèle modifié pour un test.** Les scripts appellent des modèles au nom fixe
   (`map-reduce-fr`...). Pour tester avec d'autres paramètres, on remplace
   temporairement le modèle, puis on le recrée à l'identique :
@@ -306,13 +311,13 @@ dure environ 22 500 caractères, plafond environ 10 750) ; 0 et « abc » refus�
   qui s'applique (refine, qui réserve deux fois `num_predict`, doit donner la plus petite).
 - [ ] **6.3** Découper avec le `CIBLE_CTX` par défaut, puis lancer un mode avec
   `CIBLE_CTX=0.1` : le contrôle au lancement doit refuser les tranches.
-- [ ] **6.4** Sur un dossier découpé sans `-t` (document long), lancer map-reduce sur une
+- [ ] **6.4** Sur un dossier découpé sans `-t` (`travail-seance`), lancer map-reduce sur une
   tranche, puis lire `prompt_eval_count` dans le `.reponse.json` de `DEBUG_DOSSIER`. Il doit
   rester sous `CIBLE_CTX × num_ctx` + environ 1 000 tokens (système et texte fixe), soit
   environ 5 300 avec les réglages par défaut.
 - [ ] **6.5** Comparer la qualité de l'extraction (nombre d'éléments, valeurs inventées) sur
-  un même document assez long découpé avec `CIBLE_CTX` à 0.25, 0.35 et 0.6 (trois dossiers
-  de travail). Comparer aussi avec l'ancienne version (2000 mots, soit environ
+  le long débat découpé avec `CIBLE_CTX` à 0.25, 0.35 et 0.6 (trois dossiers de
+  travail : `CIBLE_CTX=0.25 ./decouper.sh documents/seance.md travail-seance-025`...). Comparer aussi avec l'ancienne version (2000 mots, soit environ
   12 000 caractères par tranche).
 
 ## 7. Consignes de longueur données au modèle
@@ -327,7 +332,7 @@ dure environ 22 500 caractères, plafond environ 10 750) ; 0 et « abc » refus�
   `debats.md` : les limites de longueur ne doivent pas faire fusionner des éléments
   distincts.
 - [ ] **7.4** En `refine`, vérifier que les notes restent sous les 800 mots annoncés au bout
-  d'une dizaine de tranches (document long).
+  d'une dizaine de tranches (long débat).
 
 ## 8. Découpage unique, séries et intervalles
 
@@ -378,3 +383,134 @@ intervalle inversé ou trop grand, du nom de série `tranches` et d'un dossier n
 - [ ] **9.2** Lancer `fusion.sh` depuis un autre dossier que la racine du dépôt.
 - [ ] **9.3** Message d'erreur quand `curl` ou `jq` est absent.
 - [ ] **9.4** Message d'erreur quand le serveur ollama n'est pas démarré.
+
+# Résultats (21 novembre 2026)
+
+ollama 0.40.13, curl 8.23.0, jq 1.8.2, gawk 5.4.1, GPU RTX 5060 Laptop (8 Go). Modèles
+recréés à partir des Modelfiles de la branche.
+
+## À corriger
+
+- **2.5 : troncature silencieuse non détectée. Corrigé** (voir « Après correction »). Quand le prompt dépasse `num_ctx`, ollama
+  le ramène à la **moitié** de `num_ctx` (journal : `truncating input prompt limit=6147
+  prompt=24609`). `prompt_eval_count` vaut alors 6147 : le contrôle « prompt + num_predict >
+  num_ctx » ne se déclenche jamais, et le résultat (calculé sur un quart du texte, sans le
+  début du prompt) est enregistré. Le ratio mesuré monte à 16 car./token, sans
+  avertissement (on ne prévient que s'il est trop bas).
+  Correctif (2.3) : ollama 0.40.13 accepte `truncate: false` et `shift: false` au premier
+  niveau de la requête ; l'un et l'autre renvoient une erreur 400 au lieu de tronquer
+  (`request (29922 tokens) exceeds the available context size`). Les ajouter dans
+  `appeler_modele`. Attention : après ce refus, ollama a redémarré le processus du modèle
+  (`llama-server terminated`), ce qui coupe les requêtes en cours d'autres clients.
+- **7.4 : les notes de refine grossissent sans limite.** Sur le long débat (13 tranches) :
+  87 mots après la tranche 1, puis environ +75 mots par tranche, 861 mots à la tranche 11,
+  987 à la tranche 13 (57 éléments). La dernière réponse fait 1 745 tokens pour
+  `num_predict` 2048 : vers la tranche 15, la réponse sera coupée et le script s'arrêtera.
+  Le modèle ne regroupe pas les éléments. De plus, presque toutes les températures des
+  notes sont à 0° ou 90° : la nuance se perd.
+
+## Défauts de qualité du modèle (pas des scripts)
+
+- Map-reduce écrit parfois une ligne « * Aucun poisson n'est mentionné… » au lieu de la
+  ligne de titre seule (2 tranches sur 12, sur un dictionnaire) ; la fusion la
+  compte comme un élément. Il range aussi la langouste parmi les poissons.
+- L'index de la tranche apparaît parfois dans les parenthèses : « (index : 3) »
+  (7 fichiers de résultats sur l'ensemble des tests).
+- Une valeur en mots au lieu d'un nombre en refine : « (Température : calme) » (8.8).
+- Températures surtout aux extrêmes (0° ou 100°) sur `debats.md`, sans inversion.
+
+## Attentes du plan à revoir
+
+- **2.4 et 2.5** : `exemples-long.md` répète un titre `#` toutes les 1 000 caractères
+  environ ; le découpage coupe sur un titre dès le quart de la taille maximale, d'où des
+  tranches de 24 000 caractères qui ne débordent pas. Utiliser une copie sans titres :
+  `sed 's/^#/Titre :/' exemples-long.md > exemples-long-sans-titres.md` (2 tranches de
+  96 734 et 23 506 caractères).
+- **8.4** : avec `CIBLE_CTX` 0.35, le plafond (10 751 caractères) est le même pour tous les
+  modèles ; `-m map-reduce-fr` ne donne une taille plus grande qu'avec `CIBLE_CTX=1`.
+- **8.6** : `CIBLE_CTX` ne plafonne que l'extrait. Avec une question de 3 000 caractères, la
+  limite dure reste au-dessus du plafond et le prompt tient : le script appelle le modèle,
+  à juste titre. Il faudrait une question d'environ 12 000 caractères pour l'arrêter.
+- **8.13** : mawk n'est pas installé, test non fait.
+
+## Détail
+
+| Test | Résultat |
+|---|---|
+| 1.1, 1.3 | OK : quatre champs remplis, format du Modelfile respecté |
+| 1.2 | OK : `think: false` ; sans ce champ, 628 tokens générés au lieu de 44 (raisonnement), contenu identique |
+| 1.4 | OK : aucune différence entre la tranche et le texte du prompt |
+| 1.5, 9.4 | OK : message d'ollama affiché (`model 'x' not found`) ; serveur absent : « pas de réponse » |
+| 1.6, 5.1 | OK |
+| 1.7 | OK : tranches et réponses de premier-dernier identiques à `main` (`MAX_MOTS=80 MIN_MOTS=20`) |
+| 2.1 | Troncature silencieuse confirmée, à `num_ctx`/2 (voir plus haut) |
+| 2.2 | OK : `prompt_eval_count` identique (630) sur trois envois : le cache ne le fausse pas |
+| 2.3 | `truncate: false` et `shift: false` fonctionnent ; `options.truncate` est ignoré |
+| 2.4 | OK (avec le document sans titres) : arrêt avant tout appel |
+| 2.5 | **Échec** avant correction ; OK après (voir « Après correction ») |
+| 3.1, 3.2, 3.3 | OK : arrêt sur `length` dans les trois modes, y compris premier-dernier ; rien d'enregistré |
+| 4.1, 4.2 | OK : reprise, aucun `.tmp` |
+| 4.3 | OK ; en refine, les tranches suivantes ne sont pas refaites (attendu) |
+| 5.2, 5.3 | OK : avertissement à chaque appel ; point décimal en `fr_FR.UTF-8` |
+| 5.4 | Sans objet (2.2) |
+| 5.5 | Ratios : `debats.md` 3,7-3,8 ; séance 3,9-4,0 ; tableaux 4,9-5,7. 2,5 reste prudent |
+| 6.1, 6.2, 6.3 | OK |
+| 6.4 | OK : 3 285 tokens pour la plus grande tranche (10 675 car.), sous 5 300 |
+| 6.5 | Éléments extraits de la séance (map-reduce, question des températures) : `CIBLE_CTX` 0.25 → 17 tranches, 111 éléments ; 0.35 → 13, 83 ; 0.6 → 9, 57 ; `main` (2000 mots) → 11, 77. Échantillon (tranche 8 à 0.35) sans invention ; températures hautes là où sont les marques (tranches 4, 5, 12), basses ailleurs |
+| 7.1 | OK : 11 dépassements sur 255 lignes, tous dus aux 3 mots de « (Température : N°) » |
+| 7.2 | Premier-dernier OK (seul poisson : « Harengs ») ; map-reduce « animaux » complet sur la tranche 1 ; défauts du modèle ci-dessus |
+| 7.3 | `debats.md` : 8 éléments avant et après ; séance : 76 avant, 72 après, précisions plus courtes (10,2 → 7,9 mots en moyenne, max 17 → 13) |
+| 7.4 | **Échec** (voir plus haut) |
+| 8.1, 8.2, 8.3, 8.5 | OK |
+| 8.7 | OK : `question.txt` propre à chaque série ; une autre question sur une série existante est refusée |
+| 8.8, 8.9 | OK |
+| 8.10 | OK : `final_002-004.md`, `final_002-003.md` |
+| 8.11 | OK : `index=3` ; extraits cités 2, 3, 4 conformes au tableau de référence |
+| 8.12 | OK : 1 321 tranches, `999.md` puis `1000.md`, ordre correct avec `sort -V` |
+| 9.1 | Map-reduce fr/en : tous les sujets, aucune inversion de température. Refine fr : la contribution foncière est fusionnée à 100° (le calme de la tranche 1 est perdu), sel et produits de l'Est à 50° (attendu ≤ 25°). Refine en : « droits de traites » traduit « treaty rights ». Premier-dernier fr/en : « pain » … « pommes de terre » |
+| 9.2, 9.3, 9.5 | OK |
+
+## Après correction du 2.5
+
+`appeler_modele` envoie `truncate: false` et `shift: false`, et rejette une réponse dont
+le ratio caractères/token dépasse `RATIO_MAX` (8 par défaut).
+
+| Test | Résultat |
+|---|---|
+| 2.5 | OK : erreur 400 d'ollama affichée (`request (24609 tokens) exceeds the available context size (12288 tokens)`), arrêt, aucun `t3/001.md` |
+| Contrôle de secours | OK, testé sur `verifier_ratio` seul : ratio 19,6 (texte long, 6 147 tokens) refusé avec un message ; 3,1 accepté |
+| Appel normal | OK : `debats.md`, tranche 2, ratio 3,76, résultat enregistré ; l'avertissement de `CAR_PAR_TOKEN=10` reste affiché |
+| À faire | Vérifier le message de `shift: false` sur un prompt qui tient mais dont la réponse déborde (pas reproduit) |
+
+## Contrôle de la VRAM
+
+`ollama ps` n'est pas fiable avec ollama 0.40.13 : il affiche « 1.0 GB, 100% GPU » alors
+que le journal montre `offloaded 39/49 layers to GPU`. `verifier_vram` lit donc le
+journal (`journalctl -u ollama`), juste après un appel qui a chargé le modèle
+(`load_duration` ≥ 1 s).
+
+| Test | Résultat |
+|---|---|
+| Modèle déchargé (`ollama stop`) puis script | OK : avertissement « 39 couches sur 49 » au premier appel seulement |
+| `num_ctx` 4096 / 12288 / 32768 | 40 / 39 / 37 couches sur 49 ; 31 / 33-36 / 30 tokens/s. Sur 8 Go, ce sont les poids (7 Go) qui débordent, pas le contexte |
+| Journal inaccessible | OK : « VRAM non vérifiée », le script continue |
+
+## Contrôle du matériel
+
+Sans mesure fiable de la température et de la batterie, le script s'arrête avant tout
+appel. Vérifié sur des capteurs simulés (copie de `lib/commun.sh` lisant un faux
+`/sys/class`) :
+
+| Cas | Résultat |
+|---|---|
+| Aucun capteur, capteur vide ou non numérique, 0 °C, 127 °C | arrêt avec le nom et le chemin du capteur |
+| `nvidia-smi` en erreur ou « [N/A] » | arrêt |
+| Température ≥ `TEMP_MAX` pendant plus de `PAUSE_MAX` | pauses de 30 s, puis arrêt (code 2) |
+| Batterie à 15 % débranchée, y compris nommée `CMB0` | arrêt (code 2) |
+| Charge ou état de batterie illisible | arrêt |
+| Ordinateur sans batterie | accepté |
+| Batterie d'appareil (`scope` = `Device`) illisible | ignorée |
+
+Sur la machine de test, 9 capteurs sont lus (dont `k10temp`, le processeur, que l'ancien
+code ignorait). Pendant les appels, le processeur monte à 83-85 °C, près de `TEMP_MAX`
+(90) : des pauses sont à prévoir.

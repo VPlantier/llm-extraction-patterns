@@ -69,8 +69,26 @@ premier-dernier/premier-dernier.sh [-d from] [-a to] fr|en working_directory ser
 The scripts resume where they stopped: a slice whose output file already exists
 is skipped. Delete a slice's file to redo it.
 
-Before each call, the script stops if the battery is below 20 % and unplugged.
-It also pauses while the CPU/GPU temperature is at or above `TEMP_MAX`.
+At startup, the script prints the hardware readings (number of temperature sensors,
+the highest one, battery state). Before each call, it stops if the battery is below
+20 % and unplugged, and pauses while the temperature is at or above `TEMP_MAX`; if it
+stays there longer than `PAUSE_MAX` seconds, it stops (resuming restarts from the
+current slice). Temperatures are read from every Linux sensor (`/sys/class/hwmon`:
+CPU, AMD or Intel GPU, SSD...; `/sys/class/thermal`) and from `nvidia-smi` when
+installed.
+
+**No reliable reading, no model call**: the script stops with a message if no
+temperature sensor is found (a non-Linux system, for instance), if a sensor is
+unreadable or gives an impossible value (outside 1 to 124 °C, such as the 127 °C of a
+faulty sensor), if `nvidia-smi` fails, or if a battery is unreadable. A computer
+without a battery is accepted.
+
+Every call prints the generation speed (tokens/s). When a call has just loaded the
+model, the script checks ollama's journal (`journalctl -u ollama`) that the model fits
+entirely in GPU memory, and warns otherwise: ollama then puts some layers on the CPU,
+without any error, and the model slows down. `ollama ps` is not reliable for this (it
+can wrongly show "100% GPU"). Without access to the journal (ollama started by hand with
+`ollama serve`), the check is skipped with a message.
 
 ### 3. Dig into a range
 
@@ -157,9 +175,14 @@ slice in the range exceeds it, the script stops before any call.
 It is an estimate. After each call, the script therefore reads the
 ollama API response and **stops without saving anything** for the slice if:
 
+- ollama rejects the request because it exceeds the context (the request sets
+  `truncate: false` and `shift: false`; without them, ollama silently cuts a prompt that
+  is too long down to half of `num_ctx`, or forgets the start of the context while writing);
 - the answer was cut off by `num_predict` (`done_reason` = `length`);
 - the actual prompt (`prompt_eval_count`) + `num_predict` exceeds `num_ctx`: the estimate
-  was wrong and ollama may have truncated the prompt.
+  was wrong;
+- the chars/token ratio exceeds `RATIO_MAX`: the model read far fewer tokens than the
+  text contains, so the prompt was truncated (fallback check).
 
 The message says which setting to change. Since nothing was saved, resuming
 redoes that slice. Prompt and answer token counts are printed for every call,
@@ -174,8 +197,10 @@ conservative for this document (numbers, tables, URLs, code...).
 | `QUESTION_MAX` | 500 | expected max question length, in characters (slicing) |
 | `CAR_PAR_TOKEN` | 2.5 | conservative chars/token ratio |
 | `MARGE_TOKENS` | 256 | room for the chat template |
+| `RATIO_MAX` | 8 | chars/token ratio above which the answer is rejected (truncated prompt) |
 | `CIBLE_CTX` | 0.35 | max share of `num_ctx` taken by the excerpt (between 0 and 1) |
 | `TEMP_MAX` | 90 | temperature (°C) that triggers a pause |
+| `PAUSE_MAX` | 600 | max length (s) of a temperature pause before stopping |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | ollama server address |
 | `DEBUG_DOSSIER` | (empty) | when set, every call saves its request (`.requete.json`, replayable with `curl`), the readable prompt (`.prompt.txt`) and ollama's raw response (`.reponse.json`) there |
 
