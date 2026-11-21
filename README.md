@@ -2,14 +2,15 @@
 
 Bash scripts that extract, from a long Markdown document, what answers a
 question, using a local model served by [ollama](https://ollama.com).
-The document is split into slices, then processed by one of three modes.
+The document is first split into slices, once and for all, in a working
+directory. Each question is then processed over these slices by one of three modes.
 French documentation: [LISEZMOI.md](LISEZMOI.md). Code comments and messages are in French.
 
-| Mode | Directory | Principle | Output |
+| Mode | Directory | Principle | Output (in `work/<series>/`) |
 |------|-----------|-----------|--------|
-| refine | `refine/` | Each slice is read together with the previous notes, which the model rewrites. | `note_NNN.md` (successive versions), `fusion.md` |
-| map-reduce | `map-reduce/` | Each slice is processed on its own, without feeding back earlier results, then the results are merged. | `map/NNN.md`, `final.md` |
-| first-last (`premier-dernier`) | `premier-dernier/` | Finds the first and last items of the document that meet a criterion. | `final.md` (two lines) |
+| refine | `refine/` | Each slice is read together with the previous notes, which the model rewrites. | `NNN.md` (notes after slice NNN), `fusion_<from>-<to>.md` |
+| map-reduce | `map-reduce/` | Each slice is processed on its own, without feeding back earlier results, then the results are merged. | `NNN.md` (answer for slice NNN), `final_<from>-<to>.md` |
+| first-last (`premier-dernier`) | `premier-dernier/` | Finds the first and last items that meet a criterion. | `NNN.md` (slices analysed), `final_<from>-<to>.md` (two lines) |
 
 Each directory holds one script and two agent definitions (`<mode>-fr.Modelfile`,
 `<mode>-en.Modelfile`). The ollama model is named after the file.
@@ -22,31 +23,95 @@ for d in refine map-reduce premier-dernier; do
 done
 ```
 
-Recreate a model after editing its Modelfile. Only bash, awk (gawk) and ollama are needed.
+Recreate a model after editing its Modelfile. You need bash, awk (gawk), ollama, curl (7.76 or later) and jq.
+The scripts call the ollama API at `OLLAMA_URL` (default `http://127.0.0.1:11434`).
 
 ## Usage
 
+### 1. Split the document: `decouper.sh`
+
 ```bash
-refine/refine.sh en debates.md "Which topics are debated? Give the debate temperature from 0° to 100°."
-map-reduce/map-reduce.sh en debates.md "Which topics are debated? Give the debate temperature from 0° to 100°."
-premier-dernier/premier-dernier.sh en dictionary.md "a word that names a kind of food"
+./decouper.sh [-t size] [-m model]... document.md working_directory
 ```
 
-An optional fourth argument sets the output directory (default `resultats-<mode>`).
-The scripts resume where they stopped: a step whose output file already exists is skipped.
-Delete the output directory to start over. Resuming assumes the document and
-settings are unchanged, otherwise the slices no longer match.
+Slices are written to `working_directory/tranches/001.md`, `002.md`...
+and the slicing parameters to `working_directory/decoupage.txt`.
 
-Before each call, the script stops if the battery is below 20 % and unplugged.
-It also pauses while the CPU/GPU temperature is at or above `TEMP_MAX`.
+- Without `-t`, the size (in characters) is the largest one that suits every
+  installed model, for a question of at most `QUESTION_MAX` characters. The script
+  prints each model's limits.
+- With `-t`, the given size is refused if it exceeds that maximum.
+- `-m` (repeatable) restricts the calculation to the models you plan to use.
+
+A working directory is never re-split: slice numbers are stable references for
+every series of results. For a different slicing, create another working directory.
+
+Slices preferably break on a `#` or `##` heading once they reach a quarter of the
+size. An overlong line is split between words.
+
+### 2. Ask a question: one series per question
+
+```bash
+refine/refine.sh [-d from] [-a to] fr|en working_directory series "question"
+map-reduce/map-reduce.sh [-d from] [-a to] fr|en working_directory series "question"
+premier-dernier/premier-dernier.sh [-d from] [-a to] fr|en working_directory series "criterion"
+```
+
+- Results go to `working_directory/series/`, one file per slice, named after the
+  slice. Several questions can thus work on the same slices, each in its own series.
+- The mode, language and question are saved in `series/question.txt`: a series
+  cannot be resumed with a different question.
+- `-d` and `-a` restrict processing to slices `from` to `to` (default: all).
+- Before starting, the script checks that every slice in the range fits the model's
+  context with this question. Otherwise it stops: shorten the question, or re-split
+  into another working directory.
+
+The scripts resume where they stopped: a slice whose output file already exists
+is skipped. Delete a slice's file to redo it.
+
+At startup, the script prints the hardware readings (number of temperature sensors,
+the highest one, battery state). Before each call, it stops if the battery is below
+20 % and unplugged, and pauses while the temperature is at or above `TEMP_MAX`; if it
+stays there longer than `PAUSE_MAX` seconds, it stops (resuming restarts from the
+current slice). Temperatures are read from every Linux sensor (`/sys/class/hwmon`:
+CPU, AMD or Intel GPU, SSD...; `/sys/class/thermal`) and from `nvidia-smi` when
+installed.
+
+**No reliable reading, no model call**: the script stops with a message if no
+temperature sensor is found (a non-Linux system, for instance), if a sensor is
+unreadable or gives an impossible value (outside 1 to 124 °C, such as the 127 °C of a
+faulty sensor), if `nvidia-smi` fails, or if a battery is unreadable. A computer
+without a battery is accepted.
+
+Every call prints the generation speed (tokens/s). When a call has just loaded the
+model, the script checks ollama's journal (`journalctl -u ollama`) that the model fits
+entirely in GPU memory, and warns otherwise: ollama then puts some layers on the CPU,
+without any error, and the model slows down. `ollama ps` is not reliable for this (it
+can wrongly show "100% GPU"). Without access to the journal (ollama started by hand with
+`ollama serve`), the check is skipped with a message.
+
+### 3. Dig into a range
+
+Once an item shows up in slice n, you can ask a more precise question over a
+narrow range around n, in a new series. In refine, the starting notes are the file
+just before the first slice: `000.md` without `-d`, `011.md` with `-d 12`. If it
+exists, it is used as is, so you can write or fix it by hand before running the
+script. Otherwise it is created empty.
+
+Taking back control between passes, rather than chaining the model's outputs
+automatically, avoids piling up its hallucinations.
 
 ## Example
 
-`exemples/debats.md` is a short (French) record of debates. The small `MAX_MOTS`/`MIN_MOTS` values split it into 4 slices:
+`exemples/debats.md` is a short (French) record of debates. A small size splits it into 4 slices:
 
 ```bash
-MAX_MOTS=80 MIN_MOTS=20 refine/refine.sh fr exemples/debats.md "Quels sujets sont débattus ? Pour chaque sujet, indique la température du débat entre 0° (calme) et 100° (très houleux)."
-MAX_MOTS=80 MIN_MOTS=20 premier-dernier/premier-dernier.sh fr exemples/debats.md "un mot qui désigne une forme de nourriture ou d'aliment"
+./decouper.sh -t 300 exemples/debats.md travail-debats
+refine/refine.sh fr travail-debats temperature "Quels sujets sont débattus ? Pour chaque sujet, indique la température du débat entre 0° (calme) et 100° (très houleux)."
+premier-dernier/premier-dernier.sh fr travail-debats nourriture "un mot qui désigne une forme de nourriture ou d'aliment"
+# Then, on the 13 March session only (slices 3 and 4), with starting notes
+# written by hand in travail-debats/fonciere/002.md:
+refine/refine.sh -d 3 -a 4 fr travail-debats fonciere "Quelles positions sont exprimées sur la contribution foncière ?"
 ```
 
 ## Output format
@@ -73,51 +138,98 @@ It keeps every list item in order of first appearance and skips a line already s
 Whitespace and the `*`/`-` bullet are normalized.
 The most frequent title is kept, unless `-t` sets one.
 
-- In refine, it runs automatically over every version of the notes (`fusion.md`). This recovers items the model dropped or changed along the way.
-- In map-reduce, it is the *reduce* step (`final.md`).
+- In refine, it runs automatically over the notes of the range, starting notes included (`fusion_<from>-<to>.md`). This recovers items the model dropped or changed along the way.
+- In map-reduce, it is the *reduce* step (`final_<from>-<to>.md`).
 
 ## Context size guarantee
 
-ollama silently truncates a prompt longer than `num_ctx`, so the scripts bound each slice:
+ollama silently truncates a prompt longer than `num_ctx`, so the slice size is
+bounded, for each model:
 
 ```
 max_chars = (num_ctx − k × num_predict − system − fixed text − MARGE_TOKENS) × CAR_PAR_TOKEN
 ```
 
 - `num_ctx`, `num_predict` and the system prompt are read from the model (`ollama show`).
-- The fixed text is the prompt built by `prompt_complet` (`lib/commun.sh`) without excerpt or notes, using a 5-digit dummy index: the leading `=== VARIABLE ===` / `index=<n>` section (slice number, 43 for `043.md`), section headers, question and instruction.
+- The fixed text is the prompt built by `prompt_complet` (`lib/commun.sh`) without excerpt or notes, using a 5-digit dummy index: the leading `=== VARIABLE ===` / `index=<n>` section (slice number, 43 for `043.md`), section headers, question and instruction. When splitting, the question is not known yet: `QUESTION_MAX` characters are counted for it, plus 500 for the rest.
 - `k = 1` reserves room for the answer. In refine, `k = 2`: the notes read back are a previous answer, so they are bounded by `num_predict`.
 - `CAR_PAR_TOKEN` defaults to 2.5, a conservative ratio (about 4.3 chars/token measured on French text with gemma4).
-- A slice never exceeds `MAX_MOTS` words or `max_chars` characters. An overlong line (such as a whole paragraph on one line) is split between words.
 
 This is why every Modelfile must set `num_predict`.
+
+This hard limit prevents truncation, but not quality loss: a small model starts
+missing items and making things up well before its window is full. A second cap
+therefore limits the excerpt to a share of the context:
+
+```
+max_chars_target = CIBLE_CTX × num_ctx × CAR_PAR_TOKEN
+```
+
+A model's limit is the smaller of the two values. `decouper.sh` takes the smallest
+limit among the selected models. With the default settings, `CIBLE_CTX` is the
+binding one (about 10,700 characters).
+
+This calculation is redone with the actual question whenever a mode starts: if a
+slice in the range exceeds it, the script stops before any call.
+
+It is an estimate. After each call, the script therefore reads the
+ollama API response and **stops without saving anything** for the slice if:
+
+- ollama rejects the request because it exceeds the context (the request sets
+  `truncate: false` and `shift: false`; without them, ollama silently cuts a prompt that
+  is too long down to half of `num_ctx`, or forgets the start of the context while writing);
+- the answer was cut off by `num_predict` (`done_reason` = `length`);
+- the actual prompt (`prompt_eval_count`) + `num_predict` exceeds `num_ctx`: the estimate
+  was wrong;
+- the chars/token ratio exceeds `RATIO_MAX`: the model read far fewer tokens than the
+  text contains, so the prompt was truncated (fallback check).
+
+The message says which setting to change. Since nothing was saved, resuming
+redoes that slice. Prompt and answer token counts are printed for every call,
+along with the prompt's actual chars/token ratio. If that ratio is below
+`CAR_PAR_TOKEN`, a warning suggests lowering `CAR_PAR_TOKEN`: the estimate is not
+conservative for this document (numbers, tables, URLs, code...).
 
 ## Settings (environment variables)
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `MAX_MOTS` | 2000 | max slice size, in words |
-| `MIN_MOTS` | `MAX_MOTS/4` | only split on a `#`/`##` heading beyond this size, to avoid tiny slices |
+| `QUESTION_MAX` | 500 | expected max question length, in characters (slicing) |
 | `CAR_PAR_TOKEN` | 2.5 | conservative chars/token ratio |
 | `MARGE_TOKENS` | 256 | room for the chat template |
+| `RATIO_MAX` | 8 | chars/token ratio above which the answer is rejected (truncated prompt) |
+| `CIBLE_CTX` | 0.35 | max share of `num_ctx` taken by the excerpt (between 0 and 1) |
 | `TEMP_MAX` | 90 | temperature (°C) that triggers a pause |
+| `PAUSE_MAX` | 600 | max length (s) of a temperature pause before stopping |
+| `OLLAMA_URL` | `http://127.0.0.1:11434` | ollama server address |
+| `DEBUG_DOSSIER` | (empty) | when set, every call saves its request (`.requete.json`, replayable with `curl`), the readable prompt (`.prompt.txt`) and ollama's raw response (`.reponse.json`) there |
 
 ## First-last: how it works
 
 The model lists, in order, every item of the slice that meets the criterion, and
 the script keeps the first (or last) one of that list.
-For the first item, slices are scanned from the start until one contains an item.
+For the first item, the range is scanned from the start until a slice contains an item.
 For the last item, the scan starts from the end and never goes before the first item's slice.
-Answers are cached in `reponses/`. A very dense slice (a dictionary, for example)
-may hit the `num_predict` limit: the script warns about it, and you should then lower `MAX_MOTS`.
+Only the slices needed are analysed. A very dense slice (a dictionary, for example)
+may hit the `num_predict` limit: the script then stops, and you should re-split with a smaller size.
 
 ## Layout
 
 ```
-lib/commun.sh        slicing, context budget, battery, temperature, ollama call
+decouper.sh          splits a document into a working directory
 fusion.sh            de-duplicating merge (refine and map-reduce)
+lib/commun.sh        slicing, series, context budget, battery, temperature, ollama call
 refine/              refine.sh, refine-fr.Modelfile, refine-en.Modelfile
 map-reduce/          map-reduce.sh, map-reduce-fr.Modelfile, map-reduce-en.Modelfile
 premier-dernier/     premier-dernier.sh, premier-dernier-fr.Modelfile, premier-dernier-en.Modelfile
 exemples/            test document
+```
+
+Working directory:
+
+```
+work/
+  decoupage.txt      document, size, selected models, number of slices
+  tranches/          001.md, 002.md...
+  <series>/          question.txt, 000.md (refine: starting notes), 001.md..., final_ or fusion_<from>-<to>.md
 ```

@@ -39,7 +39,7 @@ if [ -n "$sortie" ] && [ -e "$sortie" ]; then
   fichiers=("${fichiers[@]}")
 fi
 
-resultat=$(awk -v titre="$titre" -f extraction.awk "${fichiers[@]}")
+resultat=$(awk -v titre="$titre" -f "$(dirname "${BASH_SOURCE[0]}")/extraction.awk" "${fichiers[@]}")
 
 if [ -n "$sortie" ]; then
   printf '%s\n' "$resultat" > "$sortie"

@@ -1,24 +1,43 @@
 #!/usr/bin/env bash
 # Extraction « premier-dernier » : trouve le premier et le dernier élément d'un
-# document qui satisfont un critère donné (ex. le premier et le dernier mot
-# d'un dictionnaire désignant une nourriture).
+# document (ou d'un intervalle de tranches) qui satisfont un critère donné
+# (ex. le premier et le dernier mot d'un dictionnaire désignant une nourriture).
 # Premier : on parcourt les tranches depuis le début jusqu'à en trouver une qui
 # contient un élément. Dernier : idem en partant de la fin. Le modèle liste
 # dans l'ordre tous les éléments de la tranche ; le script prend le premier
 # (ou le dernier) de cette liste.
+#
+# La réponse pour la tranche N est dans travail/<série>/N.md (seules les
+# tranches nécessaires sont analysées), le résultat dans
+# travail/<série>/final_<de>-<à>.md.
 set -euo pipefail
 ici="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ici/../lib/commun.sh"
 
-if [ $# -lt 3 ]; then
-  echo "Usage : $0 fr|en document.md \"critère\" [dossier]" >&2
+usage() {
+  cat >&2 <<EOF
+Usage : $0 [-d de] [-a à] fr|en dossier_de_travail série "critère"
+  -d, -a  numéros de la première et de la dernière tranche (défaut : toutes)
+Le dossier de travail est créé par decouper.sh.
+EOF
   exit 1
-fi
+}
 
+de=""
+a=""
+while getopts "d:a:h" opt; do
+  case "$opt" in
+    d) de="$OPTARG" ;;
+    a) a="$OPTARG" ;;
+    *) usage ;;
+  esac
+done
+shift $((OPTIND - 1))
+[ $# -eq 4 ] || usage
 langue="$1"
-src="$2"
-critere="$3"
-dossier="${4:-resultats-premier-dernier}"
+travail="$2"
+nom="$3"
+critere="$4"
 modele="premier-dernier-$langue"
 
 case "$langue" in
@@ -28,61 +47,61 @@ case "$langue" in
       consigne="Now list, in order of appearance, every item of this excerpt that meets the criterion, or reply NONE." ;;
   *)  erreur "Langue invalide : $langue (fr ou en)" ;;
 esac
-[ -r "$src" ] || erreur "Document illisible : $src"
 verifier_modele "$modele" "$ici/$modele.Modelfile"
+etat_materiel
+preparer_serie "$travail" "$nom" "$(printf 'mode=premier-dernier\nlangue=%s\ncritere=%s' "$langue" "$critere")" "$de" "$a"
 
 # Prompt de la tranche : prompt index extrait.
 prompt() {
   prompt_complet "$1" "$consigne" "$t_extrait" "$2" "$t_critere" <(printf '%s\n' "$critere")
 }
-# Texte fixe (hors extrait), pour le budget.
-fixe=$(prompt "$INDEX_BUDGET" /dev/null)
-max_car=$(budget_tranche "$modele" "$fixe" 1)
-[ "$max_car" -gt 500 ] || erreur "Contexte trop petit pour $modele : augmente num_ctx ou réduis num_predict / le critère."
-echo "Tranches : $MAX_MOTS mots et $max_car caractères au plus." >&2
-num_predict=$(parametre_modele "$modele" num_predict)
+# Texte fixe (hors extrait).
+verifier_tranches "$modele" "$(prompt "$INDEX_BUDGET" /dev/null | wc -m)" 1
+nb=${#TRANCHES[@]}
 
-mkdir -p "$dossier/reponses"
-decouper "$src" "$dossier/tranches" "$MAX_MOTS" "$max_car"
-mapfile -t tranches < <(printf '%s\n' "$dossier"/tranches/*.md)
-nb=${#tranches[@]}
-
-# Fait analyser une tranche (une seule fois, réponse mise en cache) et
+# Fait analyser une tranche (une seule fois, réponse enregistrée) et
 # affiche ses éléments, un par ligne, puce normalisée en « * ».
+# Échoue sans rien enregistrer si l'appel au modèle échoue (réponse coupée,
+# contexte dépassé) : une reprise refera cette tranche.
+# À appeler dans une affectation (liste=$(elements f)) et non dans un tube :
+# l'échec arrête alors le script (set -e).
 elements() {
   local f="$1" res
-  res="$dossier/reponses/$(basename "$f")"
+  res="$SERIE/$(basename "$f")"
   if [ ! -s "$res" ]; then
     avant_appel
     echo "Tranche $f -> $res" >&2
-    prompt "$(indice_tranche "$f")" "$f" | appeler_modele "$modele" > "$res.tmp"
+    # set -e ne s'applique pas dans $(...) : l'échec doit être traité ici.
+    if ! prompt "$(indice_tranche "$f")" "$f" | appeler_modele "$modele" > "$res.tmp"; then
+      rm -f "$res.tmp"
+      return 1
+    fi
     echo >> "$res.tmp"
     mv "$res.tmp" "$res"
-    # Réponse proche de la limite : la fin de la liste a pu être coupée.
-    if [ "$(wc -m < "$res")" -gt $((num_predict * 3)) ]; then
-      echo "  Attention : réponse très longue pour $f, la liste a pu être tronquée (réduis MAX_MOTS)." >&2
-    fi
   fi
   sed -nE 's/^[[:space:]]*[*-][[:space:]]+([^[:space:]].*)$/* \1/p' "$res" | sed -E 's/[[:space:]]+$//'
 }
 
+final="$SERIE/final_$(num "$DE")-$(num "$A").md"
 premier=""; idx=-1
 for ((k = 0; k < nb; k++)); do
-  premier=$(elements "${tranches[k]}" | head -n 1)
+  liste=$(elements "${TRANCHES[k]}")
+  premier=$(head -n 1 <<< "$liste")
   if [ -n "$premier" ]; then idx=$k; break; fi
 done
 if [ "$idx" -lt 0 ]; then
-  : > "$dossier/final.md"
-  echo "Aucun élément ne satisfait le critère." >&2
+  : > "$final"
+  echo "Aucun élément ne satisfait le critère dans les tranches $DE à $A." >&2
   exit 3
 fi
 
 dernier=""
 for ((k = nb - 1; k >= idx; k--)); do
-  dernier=$(elements "${tranches[k]}" | tail -n 1)
+  liste=$(elements "${TRANCHES[k]}")
+  dernier=$(tail -n 1 <<< "$liste")
   [ -n "$dernier" ] && break
 done
 
-printf '%s\n%s\n' "$premier" "$dernier" > "$dossier/final.md"
-echo "Premier (tranche $((idx + 1))/$nb) et dernier : $dossier/final.md" >&2
-cat "$dossier/final.md"
+printf '%s\n%s\n' "$premier" "$dernier" > "$final"
+echo "Premier (tranche $(indice_tranche "${TRANCHES[idx]}")) et dernier : $final" >&2
+cat "$final"

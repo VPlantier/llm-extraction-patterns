@@ -15,8 +15,8 @@ Format obligatoire des notes :
 * **<Idée générale>** <précision brève> (<autre>)
 
 - Une seule ligne par élément, commençant par « * ».
-- <Idée générale> : quelques mots qui nomment l'élément.
-- <précision brève> : une phrase courte, fidèle au document.
+- <Idée générale> : quelques mots (6 au plus) qui nomment l'élément.
+- <précision brève> : une phrase courte (15 mots au plus), fidèle au document.
 - (<autre>) : uniquement les données que la QUESTION demande explicitement pour chaque élément, sous la forme (Nom : valeur), séparées par « ; » s'il y en a plusieurs. Exemple : (Température : 50°). La valeur respecte exactement l'échelle ou l'unité demandée (par exemple un nombre de degrés), jamais un mot à la place. Si la question ne demande rien de tel, n'écris pas de parenthèses.
 - Exemple de ligne, pour une question qui demande une température de débat :
   * **Réforme de la contribution foncière** distinction entre sols productifs et non productifs (Température : 50°)

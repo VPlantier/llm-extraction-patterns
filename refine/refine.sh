@@ -1,19 +1,39 @@
 #!/usr/bin/env bash
-# Extraction « refine » : le document est lu tranche par tranche et le modèle
+# Extraction « refine » : les tranches sont lues dans l'ordre et le modèle
 # réécrit à chaque étape des notes cumulées (notes N = f(tranche N, notes N-1)).
+#
+# Les notes après la tranche N sont dans travail/<série>/N.md. Les notes de
+# départ sont le fichier qui précède la première tranche traitée (000.md, ou
+# 011.md avec -d 12) : s'il existe, il est utilisé tel quel, ce qui permet de
+# partir de notes écrites ou corrigées à la main ; sinon il est créé vide.
 set -euo pipefail
 ici="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ici/../lib/commun.sh"
 
-if [ $# -lt 3 ]; then
-  echo "Usage : $0 fr|en document.md \"question\" [dossier]" >&2
+usage() {
+  cat >&2 <<EOF
+Usage : $0 [-d de] [-a à] fr|en dossier_de_travail série "question"
+  -d, -a  numéros de la première et de la dernière tranche (défaut : toutes)
+Le dossier de travail est créé par decouper.sh.
+EOF
   exit 1
-fi
+}
 
+de=""
+a=""
+while getopts "d:a:h" opt; do
+  case "$opt" in
+    d) de="$OPTARG" ;;
+    a) a="$OPTARG" ;;
+    *) usage ;;
+  esac
+done
+shift $((OPTIND - 1))
+[ $# -eq 4 ] || usage
 langue="$1"
-src="$2"
-question="$3"
-dossier="${4:-resultats-refine}"
+travail="$2"
+nom="$3"
+question="$4"
 modele="refine-$langue"
 
 case "$langue" in
@@ -25,30 +45,31 @@ case "$langue" in
       consigne="Now rewrite the complete, updated version of the notes, in the required format." ;;
   *)  erreur "Langue invalide : $langue (fr ou en)" ;;
 esac
-[ -r "$src" ] || erreur "Document illisible : $src"
 verifier_modele "$modele" "$ici/$modele.Modelfile"
+etat_materiel
+preparer_serie "$travail" "$nom" "$(printf 'mode=refine\nlangue=%s\nquestion=%s' "$langue" "$question")" "$de" "$a"
 
 # Prompt de la tranche : prompt index extrait notes.
 prompt() {
   prompt_complet "$1" "$consigne" "$t_extrait" "$2" "$t_notes" "$3" \
     "$t_question" <(printf '%s\n' "$question")
 }
-# Texte fixe (hors extrait et notes), pour le budget.
-fixe=$(prompt "$INDEX_BUDGET" /dev/null /dev/null)
-max_car=$(budget_tranche "$modele" "$fixe" 2)
-[ "$max_car" -gt 500 ] || erreur "Contexte trop petit pour $modele : augmente num_ctx ou réduis num_predict / la question."
-echo "Tranches : $MAX_MOTS mots et $max_car caractères au plus." >&2
+# Texte fixe (hors extrait et notes) ; les notes relues sont une réponse
+# précédente, d'où k = 2.
+verifier_tranches "$modele" "$(prompt "$INDEX_BUDGET" /dev/null /dev/null | wc -m)" 2
 
-mkdir -p "$dossier"
-decouper "$src" "$dossier/tranches" "$MAX_MOTS" "$max_car"
+depart="$SERIE/$(num $((DE - 1))).md"
+if [ -s "$depart" ]; then
+  echo "Notes de départ : $depart (existant, utilisé tel quel)" >&2
+else
+  echo "$vide" > "$depart"
+  echo "Notes de départ : $depart (vides)" >&2
+fi
 
-echo "$vide" > "$dossier/note_000.md"
-i=0
-suiv="$dossier/note_000.md"
-for f in "$dossier"/tranches/*.md; do
-  prec="$dossier/note_$(printf %03d "$i").md"
-  i=$((i + 1))
-  suiv="$dossier/note_$(printf %03d "$i").md"
+for f in "${TRANCHES[@]}"; do
+  i=$(indice_tranche "$f")
+  prec="$SERIE/$(num $((i - 1))).md"
+  suiv="$SERIE/$(num "$i").md"
   if [ -s "$suiv" ]; then
     echo "Tranche $f déjà faite, on passe" >&2
     continue
@@ -56,7 +77,9 @@ for f in "$dossier"/tranches/*.md; do
   avant_appel
   echo "Tranche $f -> $suiv" >&2
 
-  nouvelle=$(prompt "$(indice_tranche "$f")" "$f" "$prec" | appeler_modele "$modele")
+  # En cas d'échec de l'appel (réponse coupée, contexte dépassé), le script
+  # s'arrête ici sans rien écrire : une reprise refera cette tranche.
+  nouvelle=$(prompt "$i" "$f" "$prec" | appeler_modele "$modele")
 
   mots_prec=$(wc -w < "$prec")
   mots_new=$(echo "$nouvelle" | wc -w)
@@ -64,9 +87,16 @@ for f in "$dossier"/tranches/*.md; do
     echo "  Attention : $suiv fait $mots_new mots contre $mots_prec avant, perte d'informations possible" >&2
   fi
 
-  echo "$nouvelle" > "$suiv"
+  # Écriture puis renommage : un fichier présent est toujours complet.
+  echo "$nouvelle" > "$suiv.tmp"
+  mv "$suiv.tmp" "$suiv"
 done
-echo "Dernière version : $suiv" >&2
+echo "Dernière version : $SERIE/$(num "$A").md" >&2
 
-# Union de toutes les versions : récupère les éléments perdus en route.
-"$RACINE/fusion.sh" -o "$dossier/fusion.md" "$dossier"
+# Union des versions de l'intervalle, notes de départ comprises : récupère
+# les éléments perdus en route.
+fichiers=()
+for ((i = DE - 1; i <= A; i++)); do
+  fichiers+=("$SERIE/$(num "$i").md")
+done
+"$RACINE/fusion.sh" -o "$SERIE/fusion_$(num "$DE")-$(num "$A").md" "${fichiers[@]}"
