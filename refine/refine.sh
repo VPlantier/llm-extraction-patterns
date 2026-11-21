@@ -46,6 +46,7 @@ case "$langue" in
   *)  erreur "Langue invalide : $langue (fr ou en)" ;;
 esac
 verifier_modele "$modele" "$ici/$modele.Modelfile"
+etat_materiel
 preparer_serie "$travail" "$nom" "$(printf 'mode=refine\nlangue=%s\nquestion=%s' "$langue" "$question")" "$de" "$a"
 
 # Prompt de la tranche : prompt index extrait notes.

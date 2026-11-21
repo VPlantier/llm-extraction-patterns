@@ -11,6 +11,8 @@
 #   CIBLE_CTX      part maximale de num_ctx occupée par l'extrait, pour la
 #                  qualité de l'extraction (défaut 0.35)
 #   TEMP_MAX       température (°C) au-delà de laquelle on fait une pause (défaut 90)
+#   PAUSE_MAX      durée maximale (s) d'une pause pour température : au-delà,
+#                  arrêt du script (défaut 600)
 #   OLLAMA_URL     adresse du serveur ollama          (défaut http://127.0.0.1:11434)
 #   DEBUG_DOSSIER  si défini, dossier où chaque appel enregistre sa requête et
 #                  la réponse brute d'ollama (voir appeler_modele)
@@ -21,6 +23,7 @@ MARGE_TOKENS="${MARGE_TOKENS:-256}"
 RATIO_MAX="${RATIO_MAX:-8}"
 CIBLE_CTX="${CIBLE_CTX:-0.35}"
 TEMP_MAX="${TEMP_MAX:-90}"
+PAUSE_MAX="${PAUSE_MAX:-600}"
 OLLAMA_URL="${OLLAMA_URL:-http://127.0.0.1:11434}"
 OLLAMA_URL="${OLLAMA_URL%/}"
 
@@ -218,40 +221,130 @@ verifier_tranches() {
 # Numéro sur trois chiffres : 7 -> 007.
 num() { printf '%03d' "$1"; }
 
-verifier_batterie() {
-  local bat niveau statut
-  for bat in /sys/class/power_supply/BAT*; do
-    if [ -r "$bat/capacity" ]; then
-      niveau=$(cat "$bat/capacity")
-      statut=$(cat "$bat/status")
-      if [ "$statut" = "Discharging" ] && [ "$niveau" -lt 20 ]; then
-        echo "Batterie à $niveau % et non branchée : arrêt. Relance le script une fois sur secteur." >&2
-        exit 2
-      fi
-    fi
-  done
+# Contrôle du matériel : sans mesure fiable de la température et de la
+# batterie, aucun appel au modèle. Un capteur absent, illisible ou qui donne une
+# valeur impossible arrête le script avec un message, au lieu de désactiver le
+# contrôle sans le dire.
+
+erreur_materiel() {
+  erreur "Contrôle du matériel impossible : $1. Aucun appel au modèle sans mesure fiable de la température et de la batterie."
 }
 
-temperature_max() {
-  local max=0 z t tg
-  for z in /sys/class/thermal/thermal_zone*/temp; do
-    if [ -r "$z" ]; then
-      t=$(( $(cat "$z") / 1000 ))
-      if [ "$t" -gt "$max" ]; then max=$t; fi
-    fi
+# Températures valides, en °C : en dehors, le capteur est en panne (0, 127,
+# -273... sont des valeurs d'erreur courantes).
+TEMP_VALIDE_MIN=1
+TEMP_VALIDE_MAX=124
+
+# Écrit « capteur valeur », une ligne par capteur de température (°C) :
+# capteurs hwmon (processeur, GPU AMD ou Intel, SSD...), zones thermiques, et
+# GPU NVIDIA par nvidia-smi s'il est installé. Linux donne toujours ces valeurs
+# en millièmes de degré Celsius, nvidia-smi en degrés Celsius.
+# Échoue (erreur_materiel) si un capteur est illisible ou hors des valeurs
+# valides, ou si aucun capteur n'est trouvé.
+lire_temperatures() {
+  local f v nom n=0 sortie
+  for f in /sys/class/hwmon/hwmon*/temp*_input /sys/class/thermal/thermal_zone*/temp; do
+    [ -e "$f" ] || continue
+    case "$f" in
+      */hwmon/*) nom="$(cat "${f%/*}/name" 2> /dev/null || echo hwmon)/$(basename "$f" _input)" ;;
+      *) nom="$(cat "${f%/*}/type" 2> /dev/null || echo zone)" ;;
+    esac
+    v=$(cat "$f" 2> /dev/null) || erreur_materiel "capteur $nom illisible ($f)"
+    [[ "$v" =~ ^-?[0-9]+$ ]] || erreur_materiel "capteur $nom : valeur « $v » non numérique ($f)"
+    v=$((v / 1000))
+    [ "$v" -ge "$TEMP_VALIDE_MIN" ] && [ "$v" -le "$TEMP_VALIDE_MAX" ] ||
+      erreur_materiel "capteur $nom : $v °C, valeur impossible ($f)"
+    echo "$nom $v"
+    n=$((n + 1))
   done
   if command -v nvidia-smi > /dev/null; then
-    tg=$(nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits | tr -d '\r' | awk '{v = $1 + 0; if (v > max) max = v} END {print int(max + 0.5)}')
-    if [ "$tg" -gt "$max" ]; then max=$tg; fi
+    sortie=$(nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits 2>&1) ||
+      erreur_materiel "nvidia-smi en erreur : $sortie"
+    while read -r v; do
+      v=${v//[$' \r']/}
+      [[ "$v" =~ ^[0-9]+(\.[0-9]+)?$ ]] || erreur_materiel "nvidia-smi : température « $v » non numérique"
+      v=${v%%.*}
+      [ "$v" -ge "$TEMP_VALIDE_MIN" ] && [ "$v" -le "$TEMP_VALIDE_MAX" ] ||
+        erreur_materiel "nvidia-smi : $v °C, valeur impossible"
+      echo "nvidia-smi $v"
+      n=$((n + 1))
+    done <<< "$sortie"
   fi
-  echo "$max"
+  [ "$n" -gt 0 ] || erreur_materiel "aucun capteur de température trouvé (/sys/class/hwmon, /sys/class/thermal, nvidia-smi)"
 }
 
-# À appeler avant chaque requête : batterie puis température.
-avant_appel() {
+# Écrit « nom capacité statut », une ligne par batterie de l'ordinateur (rien
+# pour un ordinateur fixe). Les batteries d'appareils (souris, casque...) sont
+# ignorées. Échoue (erreur_materiel) si une batterie est illisible.
+lire_batteries() {
+  local p nom cap statut
+  for p in /sys/class/power_supply/*; do
+    [ "$(cat "$p/type" 2> /dev/null)" = Battery ] || continue
+    [ "$(cat "$p/scope" 2> /dev/null)" != Device ] || continue
+    nom=$(basename "$p")
+    cap=$(cat "$p/capacity" 2> /dev/null) || erreur_materiel "batterie $nom : charge illisible ($p/capacity)"
+    [[ "$cap" =~ ^[0-9]+$ ]] && [ "$cap" -le 100 ] ||
+      erreur_materiel "batterie $nom : charge « $cap » impossible"
+    statut=$(cat "$p/status" 2> /dev/null) || erreur_materiel "batterie $nom : état illisible ($p/status)"
+    case "$statut" in
+      Charging | Discharging | Full | "Not charging" | Unknown) ;;
+      *) erreur_materiel "batterie $nom : état « $statut » inconnu" ;;
+    esac
+    echo "$nom $cap $statut"
+  done
+}
+
+# Arrête le script (code 2) si une batterie se décharge sous 20 %.
+verifier_batterie() {
+  local batteries nom cap statut
+  batteries=$(lire_batteries) || exit 1
+  while read -r nom cap statut; do
+    [ -n "$nom" ] || continue
+    if [ "$statut" = Discharging ] && [ "$cap" -lt 20 ]; then
+      echo "Batterie à $cap % et non branchée : arrêt. Relance le script une fois sur secteur." >&2
+      exit 2
+    fi
+  done <<< "$batteries"
+}
+
+# Plus haute température : « valeur capteur ».
+temperature_max() {
+  awk '{ v = $NF; $NF = ""; sub(/ $/, ""); if (NR == 1 || v + 0 > m) { m = v + 0; c = $0 } }
+       END { print m, c }' <<< "$1"
+}
+
+# À appeler une fois au lancement, avant tout appel au modèle : affiche les
+# mesures et arrête le script si elles ne sont pas fiables.
+etat_materiel() {
+  local mesures batteries max capteur nom cap statut
+  mesures=$(lire_temperatures) || exit 1
+  batteries=$(lire_batteries) || exit 1
+  read -r max capteur <<< "$(temperature_max "$mesures")"
+  echo "Températures : $(wc -l <<< "$mesures") capteurs, la plus haute $max °C ($capteur) ; pause à $TEMP_MAX °C, arrêt après $PAUSE_MAX s de pause." >&2
+  if [ -z "$batteries" ]; then
+    echo "Batterie : aucune (ordinateur fixe)." >&2
+  else
+    while read -r nom cap statut; do
+      echo "Batterie $nom : $cap %, $statut." >&2
+    done <<< "$batteries"
+  fi
   verifier_batterie
-  while [ "$(temperature_max)" -ge "$TEMP_MAX" ]; do
-    echo "  Température élevée, pause de 30 s..." >&2
+}
+
+# À appeler avant chaque requête : batterie puis température. Pause tant que la
+# température atteint TEMP_MAX, arrêt (code 2) si elle y reste plus de PAUSE_MAX s.
+avant_appel() {
+  local mesures max capteur debut=$SECONDS
+  verifier_batterie
+  while :; do
+    mesures=$(lire_temperatures) || exit 1
+    read -r max capteur <<< "$(temperature_max "$mesures")"
+    [ "$max" -ge "$TEMP_MAX" ] || break
+    if [ $((SECONDS - debut)) -ge "$PAUSE_MAX" ]; then
+      echo "Température toujours à $max °C ($capteur) après $PAUSE_MAX s de pause : arrêt. Vérifie le refroidissement, puis relance : la reprise repart de cette tranche." >&2
+      exit 2
+    fi
+    echo "  Température élevée ($max °C, $capteur), pause de 30 s..." >&2
     sleep 30
   done
 }
