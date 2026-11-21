@@ -79,6 +79,10 @@ for m in "${modeles[@]}"; do
   if [ -z "$max" ] || [ "$b" -lt "$max" ]; then max=$b; fi
 done
 echo "Taille maximale pour ces modèles, avec une question d'au plus $QUESTION_MAX caractères : $max caractères." >&2
+# Ce plancher vise un réglage des modèles qui ne laisse presque plus de place
+# au texte. Une taille plus petite donnée avec -t reste permise (tests).
+[ "$max" -ge 500 ] ||
+  erreur "Taille de tranche maximale trop petite ($max caractères) : augmente num_ctx ou CIBLE_CTX, réduis num_predict ou QUESTION_MAX."
 
 if [ -n "$taille" ]; then
   [ "$taille" -le "$max" ] ||
@@ -86,8 +90,7 @@ if [ -n "$taille" ]; then
 else
   taille=$((max / 100 * 100))
 fi
-[ "$taille" -ge 500 ] ||
-  erreur "Taille de tranche trop petite ($taille caractères) : augmente num_ctx ou CIBLE_CTX, réduis num_predict ou QUESTION_MAX."
+[ "$taille" -ge 1 ] || erreur "Taille invalide : $taille"
 
 mkdir -p "$travail"
 decouper "$src" "$travail/tranches" "$taille"
