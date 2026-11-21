@@ -256,6 +256,42 @@ avant_appel() {
   done
 }
 
+# Prévient si le modèle ne tient pas entièrement dans la mémoire du GPU (VRAM).
+# Ollama ne renvoie pas d'erreur dans ce cas : il place une partie des couches
+# sur le processeur, et le modèle devient plus lent. Les poids du modèle
+# comptent le plus ; num_ctx ajoute environ 670 Mo par tranche de 12 288 tokens
+# avec gemma4 12B (sur 8 Go : 40 couches sur 49 avec num_ctx 4096, 39 avec 12288).
+# « ollama ps » n'est pas fiable pour cela (ollama 0.40 : il affiche « 100% GPU »
+# alors qu'une partie du modèle est sur le processeur). On lit donc le journal
+# d'ollama : dernier chargement du fichier du modèle (ligne FROM du Modelfile),
+# puis la ligne « offloaded N/M layers to GPU » qui suit.
+# Ne vérifie rien (avec un message) si le journal est inaccessible : ollama
+# lancé à la main avec « ollama serve », pas de systemd, droits insuffisants...
+# Usage : verifier_vram modele
+verifier_vram() {
+  local modele="$1" fichier couches sur_gpu total
+  fichier=$(ollama show --modelfile "$modele" 2> /dev/null | awk '$1 == "FROM" { print $2; exit }')
+  if [ -n "$fichier" ] && command -v journalctl > /dev/null; then
+    couches=$(journalctl -u ollama --since "-30min" --no-pager -o cat 2> /dev/null | awk -v f="$fichier" '
+      index($0, "load_model: loading model") && index($0, f) { attente = 1; next }
+      attente && match($0, /offloaded [0-9]+\/[0-9]+ layers/) {
+        r = substr($0, RSTART + 10, RLENGTH - 17); attente = 0
+      }
+      END { print r }')
+  fi
+  if [ -z "${couches:-}" ]; then
+    echo "  VRAM non vérifiée : chargement de $modele introuvable dans le journal d'ollama (journalctl -u ollama)." >&2
+    return 0
+  fi
+  sur_gpu=${couches%/*}
+  total=${couches#*/}
+  if [ "$sur_gpu" -lt "$total" ]; then
+    echo "  Attention : $sur_gpu couches sur $total de $modele tiennent dans la mémoire du GPU, les autres tournent sur le processeur (plus lent). Ferme les programmes qui utilisent le GPU, réduis num_ctx dans le Modelfile, ou, si même un petit num_ctx ne suffit pas, prends un modèle plus petit." >&2
+  else
+    echo "  VRAM : $modele tient entièrement dans la mémoire du GPU ($total couches)." >&2
+  fi
+}
+
 # Affiche le ratio réel caractères/token du prompt qui vient d'être envoyé, et
 # prévient s'il est inférieur à CAR_PAR_TOKEN : l'estimation du budget n'est
 # alors pas prudente pour ce document.
@@ -313,6 +349,7 @@ verifier_ratio() {
 #   .reponse.json  réponse complète d'ollama, même si l'appel est rejeté
 appeler_modele() {
   local modele="$1" requete reponse champs raison n_prompt n_reponse num_ctx num_predict
+  local vitesse chargement
   local base="" index ok
   requete=$(jq -Rs --arg m "$modele" \
     '{model: $m, messages: [{role: "user", content: .}], stream: false, think: false,
@@ -334,12 +371,17 @@ appeler_modele() {
   if [ -n "$base" ]; then printf '%s\n' "$reponse" > "$base.reponse.json"; fi
   [ "$ok" -eq 1 ] || erreur "Échec de l'appel à ollama ($OLLAMA_URL) : ${reponse:-pas de réponse}"
 
-  champs=$(jq -r '[.done_reason // "", .prompt_eval_count // 0, .eval_count // 0] | @tsv' <<< "$reponse") ||
+  champs=$(jq -r '[.done_reason // "", .prompt_eval_count // 0, .eval_count // 0,
+      (if (.eval_duration // 0) > 0 then .eval_count / .eval_duration * 1e9 | floor else 0 end),
+      ((.load_duration // 0) / 1e9 | floor)] | @tsv' <<< "$reponse") ||
     erreur "Réponse d'ollama illisible : $reponse"
-  IFS=$'\t' read -r raison n_prompt n_reponse <<< "$champs"
+  IFS=$'\t' read -r raison n_prompt n_reponse vitesse chargement <<< "$champs"
   num_ctx=$(parametre_modele "$modele" num_ctx)
   num_predict=$(parametre_modele "$modele" num_predict)
-  echo "  prompt : $n_prompt tokens, réponse : $n_reponse tokens (num_ctx $num_ctx, num_predict $num_predict)" >&2
+  echo "  prompt : $n_prompt tokens, réponse : $n_reponse tokens à $vitesse tokens/s (num_ctx $num_ctx, num_predict $num_predict)" >&2
+  # Le modèle vient d'être chargé (en général au premier appel d'un script) :
+  # vérifier qu'il tient dans la mémoire du GPU.
+  if [ "$chargement" -ge 1 ]; then verifier_vram "$modele"; fi
   verifier_ratio "$modele" "$requete" "$n_prompt" ||
     erreur "Prompt tronqué par ollama ($n_prompt tokens lus) : redécoupe le document avec des tranches plus petites (decouper.sh -t). Rien n'est enregistré pour cette tranche."
 
